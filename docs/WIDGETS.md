@@ -50,4 +50,22 @@ codesign -d --entitlements :- "$IOS_APP/PlugIns/CodeCapsWidgets.appex" > /tmp/co
 
 These commands verify signed entitlement declarations.  They do not by themselves prove that a device can access the container or that WidgetKit has refreshed a timeline.
 
+## Home-Screen Render
+
+`scripts/test-widget-ui-native.sh` compiles the widget views off-device.  It does not place a widget on the iOS Home Screen.  `scripts/test-widget-homescreen.sh` is that check (CC-219).
+
+On a Mac with Xcode, the script creates a disposable iPhone simulator, builds the companion, and refuses to start when any simulator is already booted.  It installs the app, reboots once so WidgetKit can register the extension, and writes a fresh `quota-windows.json` into the App Group container and the app data container.  `occurredAt` is the current time and every `resetAt` is in the future.  A scratch XCUITest host long-presses empty wallpaper, taps Edit, taps Add Widget, searches for CodeCaps, and adds AI Subscription Overview.  `simctl io` writes a PNG of that Home Screen.  The test passes only when SpringBoard's accessibility tree shows the seeded GitHub Copilot reading at 37%, which the gallery placeholders do not render.
+
+The script does not open Simulator.app.
+
+The command exits 78 with an `unsupported-path:` line, and that result is not a pass, when:
+
+- The host is not macOS, or `xcrun`, `xcodebuild`, or `codesign` is missing.
+- A simulator is already booted.
+- No iOS 18 through 27 runtime is installed.
+- The App Group container cannot be resolved after install.
+- The pinned gallery controls (Edit, Add Widget, the search field, CodeCaps, Done) are absent.
+
+A gallery that does not match that contract fails closed.  The script does not try a second path and does not retry.
+
 For setup and sync configuration, see the [Setup & Data Guide](https://codecaps.simplewithus.com/setup.html).  Apple references: [App Groups entitlement](https://developer.apple.com/documentation/BundleResources/Entitlements/com.apple.security.application-groups), [Accessing App Group containers](https://developer.apple.com/documentation/xcode/accessing-app-group-containers), and [App Group access for sandboxed and notarized apps](https://developer.apple.com/documentation/security/accessing-files-from-the-macos-app-sandbox).
