@@ -402,6 +402,10 @@ def parse_data_container(text: str) -> str | None:
     return None
 
 
+def _looks_like_app_group_path(path: str) -> bool:
+    return "/AppGroup/" in path or "/Shared/AppGroup" in path or "/Containers/Shared/" in path
+
+
 def parse_group_container(text: str, group_id: str) -> str | None:
     lines = text.splitlines()
     for index, line in enumerate(lines):
@@ -414,7 +418,19 @@ def parse_group_container(text: str, group_id: str) -> str | None:
             following = lines[index + 1].strip()
             if following.startswith("/"):
                 return following
+    # `simctl get_app_container <udid> <bundle> <group-id>` often prints only
+    # the container path, with no group id in the text.
+    paths = [line.strip() for line in lines if line.strip().startswith("/")]
+    if len(paths) == 1 and _looks_like_app_group_path(paths[0]):
+        return paths[0]
     return None
+
+
+def group_container_queries(udid: str, app_bundle: str, group_id: str) -> list[list[str]]:
+    return [
+        ["xcrun", "simctl", "get_app_container", udid, app_bundle, group_id],
+        ["xcrun", "simctl", "get_app_container", udid, app_bundle, "groups"],
+    ]
 
 
 def find_device(devices_json: dict, udid: str) -> dict | None:
@@ -493,11 +509,16 @@ def companion_build_argv(udid: str, derived: Path) -> list[str]:
 
 
 def codesign_argv(bundle: Path, entitlements: Path) -> list[str]:
+    # Xcode 13+ / iOS 15+ honors application groups from the DER slot in
+    # the signature.  Ad-hoc signing without --generate-entitlement-der
+    # lets the app launch, then `simctl get_app_container … groups` stays
+    # empty because the sandbox never created the group container.
     return [
         "codesign",
         "--force",
         "--sign",
         "-",
+        "--generate-entitlement-der",
         "--entitlements",
         str(entitlements),
         str(bundle),
@@ -1113,6 +1134,30 @@ def _launch(runner: ProcessRunner, udid: str, app_bundle: str) -> tuple[int, str
     return code, output
 
 
+def _wait_for_group_container(
+    runner: ProcessRunner,
+    udid: str,
+    app_bundle: str,
+    group_id: str,
+) -> str:
+    last = ""
+    for _ in range(20):
+        for argv in group_container_queries(udid, app_bundle, group_id):
+            code, output = runner.run(argv, check=False)
+            last = f"exit {code}\n{output}"
+            if code == 0:
+                found = parse_group_container(output, group_id)
+                if found:
+                    return found
+        time.sleep(0.5)
+    raise ProbeFailure(
+        "unsupported-path: app group container is not available after install; "
+        "refusing to claim a home-screen render"
+        + (f"\n{last[-500:]}" if last else ""),
+        EXIT_UNSUPPORTED,
+    )
+
+
 def _wait_for_container(
     runner: ProcessRunner,
     argv: list[str],
@@ -1122,13 +1167,26 @@ def _wait_for_container(
     last = ""
     for _ in range(20):
         code, output = runner.run(argv, check=False)
-        last = output
+        last = f"exit {code}\n{output}"
         if code == 0:
             found = parse(output)
             if found:
                 return found
         time.sleep(0.5)
     raise ProbeFailure(refusal + (f"\n{last[-500:]}" if last else ""), EXIT_UNSUPPORTED)
+
+
+def _record_signed_entitlements(runner: ProcessRunner, bundle: Path, dest: Path) -> None:
+    """Write what codesign actually embedded, so a missing App Group is visible in the artifact."""
+    try:
+        _code, output = runner.run(
+            ["codesign", "-d", "--entitlements", ":-", str(bundle)],
+            check=False,
+        )
+    except ProbeFailure as exc:
+        print(f"widget-homescreen: codesign dump: {exc}", flush=True)
+        return
+    dest.write_text(output, encoding="utf-8")
 
 
 def _best_effort(runner: ProcessRunner, argv: list[str]) -> tuple[int, str]:
@@ -1231,6 +1289,7 @@ def execute(host: Host, work: Path) -> int:
         )
         runner.run(codesign_argv(appex, sign_widget))
         runner.run(codesign_argv(app, sign_app))
+        _record_signed_entitlements(runner, app, work / "signed-app-entitlements.xml")
         _boot(runner, udid)
         runner.run(["xcrun", "simctl", "install", udid, str(app)])
         runner.run(["xcrun", "simctl", "shutdown", udid], check=False)
@@ -1241,12 +1300,7 @@ def execute(host: Host, work: Path) -> int:
                 f"failed: companion did not launch\n{launch_out[-1000:]}",
                 EXIT_FAILED,
             )
-        group = _wait_for_container(
-            runner,
-            ["xcrun", "simctl", "get_app_container", udid, app_bundle, "groups"],
-            lambda text: parse_group_container(text, app_group),
-            "unsupported-path: app group container is not available after install; refusing to claim a home-screen render",
-        )
+        group = _wait_for_group_container(runner, udid, app_bundle, app_group)
         app_data = _wait_for_container(
             runner,
             ["xcrun", "simctl", "get_app_container", udid, app_bundle, "data"],

@@ -41,6 +41,7 @@ from widget_homescreen_probe import (  # noqa: E402
     _cleanup,
     deletion_allowed,
     find_udid_by_name,
+    group_container_queries,
     interpret_log,
     main,
     materialize_probe_project,
@@ -275,6 +276,24 @@ class SeedAndResultTests(unittest.TestCase):
         )
         self.assertIsNone(parse_group_container(text, "group.missing"))
         self.assertEqual(parse_data_container("/tmp/app-data\n"), "/tmp/app-data")
+        bare = "/Users/runner/Library/Developer/CoreSimulator/Devices/A/data/Containers/Shared/AppGroup/UUID\n"
+        self.assertEqual(
+            parse_group_container(bare, "group.com.simplewithus.codecaps"),
+            bare.strip(),
+        )
+        data_only = "/Users/runner/Library/Developer/CoreSimulator/Devices/A/data/Containers/Data/Application/UUID\n"
+        self.assertIsNone(parse_group_container(data_only, "group.com.simplewithus.codecaps"))
+
+    def test_group_container_queries_ask_for_the_group_id_first(self):
+        queries = group_container_queries(UDID, "com.simplewithus.codecaps.ios", "group.com.simplewithus.codecaps")
+        self.assertEqual(queries[0][-1], "group.com.simplewithus.codecaps")
+        self.assertEqual(queries[1][-1], "groups")
+        self.assertTrue(all(q[:3] == ["xcrun", "simctl", "get_app_container"] for q in queries))
+
+    def test_codesign_argv_generates_entitlement_der(self):
+        argv = codesign_argv(Path("/tmp/CodeCapsCompanion.app"), Path("/tmp/app.entitlements"))
+        self.assertIn("--generate-entitlement-der", argv)
+        self.assertIn("--entitlements", argv)
 
     def test_source_dump_of_the_failure_string_is_not_a_refusal(self):
         log = (
