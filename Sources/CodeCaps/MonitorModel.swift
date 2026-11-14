@@ -1721,7 +1721,9 @@ final class MonitorModel: ObservableObject {
             rows: displaySections,
             thresholdPercent: pipLowThresholdPercent,
             enabled: pipOpenWhenLow,
-            issues: issues,
+            // The rows' own issues:  a pool participant the shared reading
+            // serves (e.g. Cursor's unified placeholder) must still count.
+            issues: rowIssues,
             disabledSources: disabledSources,
             session: &pipLowQuotaSession
         )
@@ -2860,6 +2862,11 @@ final class MonitorModel: ObservableObject {
         return nil
     }
 
+    /// `issues` as the quota rows see them:  `rowIssue(for:)` for every key.
+    var rowIssues: [String: String] {
+        issues.filter { !poolServedKeys.contains($0.key) }
+    }
+
     /// File checks publish only changed local readings.  Fleet pull and push
     /// stay on the provider/manual path, so a one-minute file poll is passive.
     private func rebuildLocalState(recordSamples: Bool) {
@@ -3004,7 +3011,7 @@ final class MonitorModel: ObservableObject {
             guard snapshot.isFresh, let remaining = snapshot.remainingPercent, let observedAt = snapshot.observedAt,
                   !window.isSupplementaryVideoQuota, !masked.contains(window.id),
                   !window.remainingUnknown,
-                  issues[window.canonicalProviderKey] == nil,
+                  rowIssue(for: window.canonicalProviderKey) == nil,
                   !disabledSources.contains(window.source ?? "") else { continue }
             let key = window.canonicalProviderKey + "|" + window.id + "|" + (window.accountKey ?? "")
             let previous = exhaustionObservationState[key]

@@ -86,6 +86,35 @@ final class SharedQuotaPoolServingTests: XCTestCase {
                        "the donor row keeps its own reading")
     }
 
+    /// The unified Cursor read always files its "waiting for this week's
+    /// reading" issue.  Once the pool serves Cursor, the low-quota PiP check
+    /// must see the row's issues, not the raw map, or Cursor could never
+    /// count as low (Kody review on #520).
+    func testLowQuotaCheckUsesRowIssuesForPoolServedParticipants() async throws {
+        let local = LocalQuotaResult(issues: [
+            "cursor": "Cursor's included plan uses the shared Grok Bot pool. Waiting for this week's reading.",
+        ])
+        let payload = QuotaResponse(generatedAt: iso.string(from: now), windows: [liveXaiWindow(percent: 5)])
+
+        let model = makeModel(serverEnabled: true)
+        model.localReadForTesting = { local }
+        model.serverFetchForTesting = { payload }
+
+        model.refresh()
+        await model.refreshTaskForTesting?.value
+
+        XCTAssertNotNil(model.issues["cursor"], "the raw map keeps the reader's issue")
+        XCTAssertTrue(model.poolServedKeys.contains("cursor"))
+        XCTAssertNil(model.rowIssues["cursor"], "the row issues drop it while the pool serves cursor")
+
+        let cursor = model.displaySections.first { $0.providerKey == "cursor" }
+        let row = try XCTUnwrap(cursor, "the cursor row is present")
+        XCTAssertFalse(PipLowQuota.rowIsLow(row, thresholdPercent: 15, issues: model.issues),
+                       "the raw map hides the low pool reading")
+        XCTAssertTrue(PipLowQuota.rowIsLow(row, thresholdPercent: 15, issues: model.rowIssues),
+                      "the row issues let the low pool reading count")
+    }
+
     func testWithoutADonorTheFailedReadsKeepTheirIssues() async throws {
         let local = LocalQuotaResult(issues: [
             "cursor": "Cursor is not signed in locally.",
