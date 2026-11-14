@@ -259,6 +259,8 @@ final class WidgetParseContractTests: XCTestCase {
         let minimax = try XCTUnwrap(parsed.first { $0.providerKey == "minimax" })
         XCTAssertEqual(minimax.windows.filter { $0.isSupplementaryVideoQuota }.count, 1,
                        "only the video daily is flagged: \(minimax.windows.map { $0.id })")
+        XCTAssertEqual(minimax.windows.count, 3,
+                       "the two 5h copies merge into one row: \(minimax.windows.map { $0.id })")
         let pair = try XCTUnwrap(minimax.dualWindows(now: now))
         XCTAssertEqual(pair.window1.cadenceToken, "5h")
         XCTAssertEqual(pair.window2.cadenceToken, "7d")
