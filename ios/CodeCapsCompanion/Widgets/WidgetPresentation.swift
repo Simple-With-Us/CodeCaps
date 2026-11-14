@@ -888,11 +888,27 @@ public enum WidgetPresentation {
         if providerKey.lowercased().contains("minimax") {
             // Case-insensitive on purpose: a producer that ships `General`
             // or `Grok:Subscription` must hit the same alias as its lowercase
-            // twin, or one allowance splits into two rows (kody, PR #369).
-            switch series.lowercased() {
+            // twin, or one allowance splits into two rows (k            var candidate = series.lowercased()
+            // The codecaps local reader's bare ids carry a machine prefix
+            // (local-mac:minimax:general:interval) where the collector's
+            // copies carry the plain series ("general"), so a local copy
+            // keyed apart from its collector twin and both 5h rows survived
+            // the merge.  Strip the local-mac:<provider>: prefix and alias
+            // the remainder through the same table;  the remainder keeps
+            // the reader's cadence word (":interval", ":weekly"), which the
+            // cadence leg of the key already separates, and
+            // "minimax:general:weekly" is a table entry in its own right
+            // (kody, PR #524).
+            if candidate.hasPrefix("local-mac:") {
+                let rest = candidate.dropFirst("local-mac:".count)
+                if let providerEnd = rest.firstIndex(of: ":") {
+                    candidate = String(rest[rest.index(after: providerEnd)...])
+                }
+            }
+            switch candidate {
             case "general", "minimax:general", "minimax:general:weekly",
-                 "minimax:coding-plan", "coding-plan":
-                return "minimax:plan"
+                 "minimax:general:interval", "minimax:coding-plan", "coding-plan":
+                return "minimax:plan" "minimax:plan"
             default:
                 return series
             }
