@@ -888,7 +888,8 @@ public enum WidgetPresentation {
         if providerKey.lowercased().contains("minimax") {
             // Case-insensitive on purpose: a producer that ships `General`
             // or `Grok:Subscription` must hit the same alias as its lowercase
-            // twin, or one allowance splits into two rows (k            var candidate = series.lowercased()
+            // twin, or one allowance splits into two rows (kody, PR #369).
+            var candidate = series.lowercased()
             // The codecaps local reader's bare ids carry a machine prefix
             // (local-mac:minimax:general:interval) where the collector's
             // copies carry the plain series ("general"), so a local copy
