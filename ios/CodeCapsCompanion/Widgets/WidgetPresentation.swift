@@ -907,7 +907,8 @@ public enum WidgetPresentation {
                 }
             }
             switch candidate {
-            case "general", "minimax:general", "minimax:general:weekly",
+            case "general", "general:interval", "general:weekly",
+                 "minimax:general", "minimax:general:weekly",
                  "minimax:general:interval", "minimax:coding-plan", "coding-plan":
                 return "minimax:plan"
             default:
