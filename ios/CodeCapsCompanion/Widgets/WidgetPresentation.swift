@@ -19,27 +19,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     /// same plan.  The label cannot answer this:  an extra allowance is
     /// rewritten into the same "Other limit" copy every unknown window gets,
     /// so the identity travels with the window.
-    public let isExtraAllowan            var candidate = series.lowercased()
-            // The codecaps local reader's bare ids carry a machine prefix
-            // (local-mac:minimax:general:interval) where the collector's
-            // copies carry the plain series ("general"), so a local copy
-            // keyed apart from its collector twin and both 5h rows survived
-            // the merge.  Strip the local-mac:<provider>: prefix and alias
-            // the remainder through the same table;  the remainder keeps
-            // the reader's cadence word (":interval", ":weekly"), which the
-            // cadence leg of the key already separates, and
-            // "minimax:general:weekly" is a table entry in its own right
-            // (kody, PR #524).
-            if candidate.hasPrefix("local-mac:") {
-                let rest = candidate.dropFirst("local-mac:".count)
-                if let providerEnd = rest.firstIndex(of: ":") {
-                    candidate = String(rest[rest.index(after: providerEnd)...])
-                }
-            }
-            switch candidate {
-            case "general", "minimax:general", "minimax:general:weekly",
-                 "minimax:general:interval", "minimax:coding-plan", "coding-plan":
-                return "minimax:plan" Bool
+    public let isExtraAllowance: Bool
     /// True when the window is a provider's supplementary video allowance
     /// beside the plan rather than inside it.  The identity is captured at
     /// construction from the wire fields (model id, model type, wire label):
