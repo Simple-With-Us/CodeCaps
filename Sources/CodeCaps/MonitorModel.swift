@@ -3195,7 +3195,7 @@ final class MonitorModel: ObservableObject {
             let snapshot = QuotaWindowSnapshot(window: window, now: now)
             guard snapshot.isFresh, window.hasReading,
                   !window.isSupplementaryVideoQuota, !masked.contains(window.id),
-                  rowIssue(for: window.canonicalProviderKey) == nil,
+                  issues[window.canonicalProviderKey] == nil,
                   !disabledSources.contains(window.source ?? "") else { return nil }
             return Self.runawayKey(window.canonicalProviderKey, window.id)
         })
