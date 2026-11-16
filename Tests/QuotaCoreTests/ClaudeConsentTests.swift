@@ -206,7 +206,7 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
     }
 
-    func testThrottledUsageRejectionDoesNotRereadCredentialsOrRunClaude() async throws {
+    func testThrottledUsageRejectionReadsStateWithoutRunningClaude() async throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         try writeFixtureLogin(expiresAt: 4_102_444_800_000, to: home)
@@ -224,10 +224,32 @@ final class ClaudeConsentTests: XCTestCase {
             renewClaudeLogin: { attempts.bump() },
             renewalThrottle: throttle)
         let result = await reader.read()
-        XCTAssertEqual(credentialReads.value, 0)
+        XCTAssertEqual(credentialReads.value, 1)
         XCTAssertEqual(attempts.value, 0)
         XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
         XCTAssertFalse(result.consentNeeded.contains("anthropic"))
+    }
+
+    func testThrottledRejectedFileDetectsRenewableKeychainWithoutRenewalOrConsent() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeFixtureLogin(expiresAt: 4_102_444_800_000, to: home)
+        let now = Date()
+        let throttle = ClaudeRenewalThrottle()
+        _ = await throttle.perform(now: now) {}
+        let reads = Counter()
+        let attempts = Counter()
+        let reader = LocalQuotaReader(homeDirectory: home, now: { now },
+            fetchJSON: { _ in Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401) },
+            runAntigravity: { Data("{}".utf8) },
+            readClaudeCredential: { reads.bump(); return .authorized(Self.expiredRenewable) },
+            renewClaudeLogin: { attempts.bump() }, renewalThrottle: throttle)
+        let result = await reader.read()
+        XCTAssertEqual(reads.value, 1)
+        XCTAssertEqual(attempts.value, 0)
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.idle.issue)
+        XCTAssertFalse(result.consentNeeded.contains("anthropic"))
+        XCTAssertTrue(result.windows.filter { $0.providerKey == "anthropic" }.isEmpty)
     }
 
     /// Serves the expired login until `bump()` has been called, then a fresh one.

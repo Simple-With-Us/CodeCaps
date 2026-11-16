@@ -198,6 +198,13 @@ public struct LocalQuotaReader: Sendable {
                     }
                 }
             }
+            if !renewed {
+                // The throttle limits Claude Code execution, not silent state
+                // discovery. A file-sourced rejected token may coexist with a
+                // renewable Keychain grant we never needed before the request.
+                recoveryFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
+                recoveryAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+            }
             let recoveryRoot = credentialRoot(recoveryAccess)
             let readableLogin = ClaudeOAuthParser.validOAuth(in: recoveryFile, now: now()) != nil
                 || ClaudeOAuthParser.validOAuth(in: recoveryRoot, now: now()) != nil
