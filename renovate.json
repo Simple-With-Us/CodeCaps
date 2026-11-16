@@ -15,6 +15,16 @@
       "matchUpdateTypes": ["major"],
       "automerge": false,
       "labels": ["dependencies", "major"]
+    },
+    {
+      "description": "Package.swift deliberately keeps sentry-cocoa on fleet major 9, shared with the iOS companion. Allow 9.x maintenance updates; revisit the major cap in the same reviewed PR as the Mac/iOS Sentry API migration.",
+      "matchManagers": [
+        "swift"
+      ],
+      "matchPackageNames": [
+        "getsentry/sentry-cocoa"
+      ],
+      "allowedVersions": "<10"
     }
   ],
   "vulnerabilityAlerts": { "labels": ["security"] }
