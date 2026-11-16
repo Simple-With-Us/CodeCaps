@@ -1,0 +1,52 @@
+name: Widget home screen
+
+# CC-219.  Drives SpringBoard on a disposable simulator and checks that the
+# CodeCaps widget rendered a seeded reading.  Exit 78 is a hard failure:  a
+# missing tool, a booted simulator, or a gallery that does not match the
+# pinned contract must not turn this check green.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/widget-homescreen.yml"
+      - "scripts/test-widget-homescreen.sh"
+      - "scripts/widget_homescreen_probe.py"
+      - "scripts/widget_homescreen_probe_test.py"
+      - "ios/WidgetHomeScreenProbe/**"
+      - "ios/CodeCapsCompanion/Widgets/**"
+      - "ios/CodeCapsCompanion/App/**"
+      - "ios/CodeCapsCompanion/App/CodeCapsCompanion.entitlements"
+      - "ios/CodeCapsCompanion/Widgets/CodeCapsWidgets.entitlements"
+      - "ios/CodeCapsCompanion/project.yml"
+      - "Sources/QuotaCore/**"
+      - "docs/WIDGETS.md"
+      - "docs/rollouts/2026-10-27-iphone-widget-quota-ui.md"
+
+concurrency:
+  group: widget-homescreen-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  homescreen:
+    name: Home-screen WidgetKit render
+    runs-on: macos-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Probe unit tests
+        run: python3 scripts/widget_homescreen_probe_test.py
+      - name: Home-screen render
+        env:
+          CODECAPS_WIDGET_HOMESCREEN_DIR: ${{ runner.temp }}/codecaps-widget-homescreen
+        run: bash scripts/test-widget-homescreen.sh
+      - name: Upload home-screen evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codecaps-widget-homescreen
+          path: ${{ runner.temp }}/codecaps-widget-homescreen/**
+          if-no-files-found: warn

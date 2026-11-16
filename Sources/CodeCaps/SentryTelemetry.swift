@@ -49,6 +49,7 @@ enum SentryTelemetry {
                 ) { return nil }
                 if IdempotentGETRetryFilter.shouldSuppressAutomaticFailedRequest(
                     url: event.request?.url,
+                    // sentry-cocoa 9.33 names this property method.
                     httpMethod: event.request?.method,
                     exceptionTypes: exceptionTypes,
                     exceptionValues: exceptionValues

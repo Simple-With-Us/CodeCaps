@@ -128,7 +128,7 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
 
         model.localResultForTesting = LocalQuotaResult(windows: [localWindow(remaining: latestRemaining(drop: 10))])
         model.setLocalEnabled(false)
-        await waitForRefresh(model)
+        await waitForRefresh(model, task: model.refreshTaskForTesting)
         XCTAssertTrue(model.activeRunawayAnomalies.isEmpty)
         XCTAssertEqual(delivered, 1)
     }
@@ -287,14 +287,61 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
 
     private func refreshAndWait(_ model: MonitorModel) async {
         model.refresh()
-        await waitForRefresh(model)
+        await waitForRefresh(model, task: model.refreshTaskForTesting)
     }
 
-    private func waitForRefresh(_ model: MonitorModel) async {
-        for _ in 0..<2_000 {
-            if !model.isRefreshing { return }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+    /// The task handle is captured by the caller before this await, so a fast
+    /// refresh cannot clear it first. The wait ends when that task finishes,
+    /// which is what makes its anomaly writes visible. A task still running
+    /// after two seconds fails the test and is left running: cancelling it
+    /// returns before the model clears `isRefreshing`.
+    private func waitForRefresh(_ model: MonitorModel, task: Task<Void, Never>?) async {
+        if let task {
+            let finished = await taskFinished(task, withinNanoseconds: 2_000_000_000)
+            if !finished {
+                XCTFail("The injected local refresh did not finish")
+                return
+            }
+        } else if model.isRefreshing {
+            for _ in 0..<2_000 where model.isRefreshing {
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
         }
-        XCTFail("The injected local refresh did not finish")
+        if model.isRefreshing {
+            XCTFail("The injected local refresh did not finish")
+        }
+    }
+
+    /// Same shape as `SnapshotWriteDrain.wait`: the deadline is cancelled when
+    /// the refresh finishes, and a timeout does not join the refresh task.
+    private func taskFinished(_ task: Task<Void, Never>, withinNanoseconds timeout: UInt64) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let gate = RefreshWaitGate()
+            gate.continuation = continuation
+            Task { @MainActor in
+                await task.value
+                gate.finish(true)
+            }
+            gate.timeoutTask = Task { @MainActor in
+                do { try await Task.sleep(nanoseconds: timeout) }
+                catch { return }
+                gate.finish(false)
+            }
+        }
+    }
+}
+
+/// Resumes one continuation. The timeout task is cancelled when the refresh wins.
+@MainActor
+private final class RefreshWaitGate {
+    var continuation: CheckedContinuation<Bool, Never>?
+    var timeoutTask: Task<Void, Never>?
+
+    func finish(_ finished: Bool) {
+        guard let continuation else { return }
+        self.continuation = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        continuation.resume(returning: finished)
     }
 }

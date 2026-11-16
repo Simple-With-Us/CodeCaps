@@ -197,6 +197,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift
+        group: Shared
     dependencies:
       - target: CodeCapsWidgetsMac
         embed: true
@@ -246,6 +248,8 @@ targets:
       - path: ../../Sources/QuotaCore/PlanMetadata.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
