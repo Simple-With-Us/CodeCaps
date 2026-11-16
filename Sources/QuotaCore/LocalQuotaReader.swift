@@ -211,8 +211,8 @@ public struct LocalQuotaReader: Sendable {
             let state = ClaudeLoginState.resolve(
                 hasUsableCredential: false,
                 access: readableLogin ? .missing : recoveryAccess,
-                renewable: ClaudeOAuthParser.isRenewable(in: recoveryFile, now: now())
-                    || ClaudeOAuthParser.isRenewable(in: recoveryRoot, now: now()))
+                renewable: ClaudeOAuthParser.canRenewAfterUsageRejection(in: recoveryFile, now: now())
+                    || ClaudeOAuthParser.canRenewAfterUsageRejection(in: recoveryRoot, now: now()))
             return ProviderRead(provider: provider, windows: [], issue: state.issue,
                                 needsConsent: state.needsConsent)
         }
