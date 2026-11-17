@@ -682,6 +682,11 @@ public enum WidgetPresentation {
                                            isAtCap: window.isExhausted) {
             return countdown.isEmpty ? cue : "\(cadence) · \(cue)"
         }
+        // An undated bar must not read as current: silence is what a fresh
+        // bar looks like, so say the age is unknown (owner, Nov-15-2026).
+        if let cue = QuotaStalenessRule.undatedCue(hasReading: true) {
+            return countdown.isEmpty ? cue : "\(cadence) · \(cue)"
+        }
         guard !countdown.isEmpty else { return cadence }
         return "\(cadence) · \(countdown)"
     }

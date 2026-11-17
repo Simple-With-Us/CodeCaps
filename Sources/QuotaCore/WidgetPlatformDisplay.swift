@@ -196,6 +196,22 @@ public enum QuotaStalenessRule {
         let word = isAtCap ? "at cap" : "stale"
         return "\(word) \u{00B7} updated \(UpdatedStamp.label(observedAt, now: now))"
     }
+
+    /// The cue a surface shows for a reading that carries a number but no
+    /// date the feed or the surface could parse.
+    ///
+    /// `cue` answers nil for an undated reading, and that is the right answer
+    /// for the shared staleness rule: undated is unverified, not stale.  But a
+    /// surface that renders the nil as no marker at all turns the hole into a
+    /// claim - an undated bar looks exactly like a fresh one, which is how the
+    /// phone showed an eighteen-hour-old feed as if it were current (owner,
+    /// Nov-15-2026 screenshot: bars with no cue under a header that said the
+    /// feed was from the night before).  A surface that renders a meter for a
+    /// reading asks this, and either dates the reading or says the age is
+    /// unknown; it never renders silence.
+    public static func undatedCue(hasReading: Bool) -> String? {
+        hasReading ? "unverified \u{00B7} age unknown" : nil
+    }
 }
 
 /// Allowance identity and source selection shared by the companion and widgets.
