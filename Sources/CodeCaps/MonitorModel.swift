@@ -537,7 +537,9 @@ final class MonitorModel: ObservableObject {
     /// (owner, Nov-15-2026: phone frozen at the night's snapshot).
     var isShareFeedStale: Bool {
         guard syncEnabled else { return false }
-        if lastSyncError != nil { return true }
+        // The newest successful push is what downstream surfaces age on: a
+        // transient error right after a fresh success must not flag the chip
+        // (Kody review, PR #528), but sharing with nothing pushed yet must.
         guard let lastSyncTime else { return true }
         return Date().timeIntervalSince(lastSyncTime) >= QuotaFreshnessRule.staleAfter
     }

@@ -384,9 +384,13 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable, Sendable {
                                             isAtCap: isExhausted) {
             return cue
         }
-        // A reading the feed never dated must not pass as current: silence
-        // is what a fresh bar looks like, and this row's number has no age
-        // to trust (owner, Nov-15-2026 stale-feed screenshot).
+        // Only an UNDATED reading falls through here: a dated one that cue
+        // passed is fresh or its period ended, and both keep the silence the
+        // shared rule chose.  A reading the feed never dated must not pass as
+        // current - silence is what a fresh bar looks like, and this row's
+        // number has no age to trust (owner, Nov-15-2026 stale-feed
+        // screenshot).
+        guard reportedAt == nil else { return nil }
         return QuotaStalenessRule.undatedCue(hasReading: remainingPercent != nil
             || absoluteRemaining != nil || absoluteLimit != nil)
     }

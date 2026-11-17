@@ -682,10 +682,16 @@ public enum WidgetPresentation {
                                            isAtCap: window.isExhausted) {
             return countdown.isEmpty ? cue : "\(cadence) · \(cue)"
         }
-        // An undated bar must not read as current: silence is what a fresh
-        // bar looks like, so say the age is unknown (owner, Nov-15-2026).
-        if let cue = QuotaStalenessRule.undatedCue(hasReading: true) {
-            return countdown.isEmpty ? cue : "\(cadence) · \(cue)"
+        // Only an undated window falls through here: a dated one that cue
+        // passed is fresh or its period ended, and both keep silence.  An
+        // undated bar must not read as current - silence is what a fresh bar
+        // looks like - but the reset stays dated, so the countdown stays in
+        // the caption (Kody review, PR #528).  A window with no number at
+        // all stays silent.
+        if window.observedAt == nil,
+           let cue = QuotaStalenessRule.undatedCue(hasReading: window.remainingPercent != nil
+               || window.absoluteRemaining != nil) {
+            return countdown.isEmpty ? cue : "\(cadence) · \(countdown) · \(cue)"
         }
         guard !countdown.isEmpty else { return cadence }
         return "\(cadence) · \(countdown)"
