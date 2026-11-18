@@ -517,7 +517,16 @@ public struct LocalQuotaReader: Sendable {
 
     private func readAntigravity() async throws -> ProviderRead {
         let provider = Provider.antigravity
-        let outcome = await antigravityCoordinator.perform(now: now(), operation: { try await self.runAntigravity() })
+        let outcome = await antigravityCoordinator.perform(
+            now: now(),
+            operation: { try await self.runAntigravity() },
+            isCacheable: { data in
+                // Never let malformed or window-free output become the cached
+                // good fetch: it would mask recovery for the whole interval.
+                guard data.count <= Self.maxProcessOutputBytes,
+                      let object = try? JSONSerialization.jsonObject(with: data) else { return false }
+                return !parseAntigravity(object, observedAt: Date()).isEmpty
+            })
         let data: Data
         let observedAt: Date
         switch outcome {
@@ -589,8 +598,10 @@ private struct ProviderRead: Sendable {
     let provider: Provider
     let windows: [QuotaWindow]
     let issue: String?
-    /// True only for the Claude reader, and only when a Claude Code login is
-    /// present but this build has not been allowed to read it.
+    /// True when the provider's data needs a user sign-in step CodeCaps will
+    /// not perform in the background: a Claude Code login this build has not
+    /// been allowed to read, or an Antigravity install whose one-time
+    /// `antigravity-usage login` (or Antigravity sign-in) is still pending.
     var needsConsent: Bool = false
 }
 
@@ -1161,7 +1172,12 @@ extension LocalQuotaReader {
         guard let head = try? handle.read(upToCount: 16_384),
               let text = String(data: head, encoding: .utf8) else { return .unknown }
         if text.contains("CC-234 quota bridge") { return .agyBridge }
-        guard text.hasPrefix("#!/usr/bin/env node"), text.contains("antigravity-usage") else { return .unknown }
+        // The literal package name in the head is only a hint: a bundled
+        // target (for example dist/index.js) may never repeat it, and genuine
+        // npm installs must still classify.  What proves the reader is a node
+        // script whose symlink-resolved path lives inside a directory named
+        // `antigravity-usage` - the npm global package layout.
+        guard text.hasPrefix("#!/usr/bin/env node") else { return .unknown }
         let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.pathComponents
         return resolved.dropLast().contains("antigravity-usage") ? .npmReader : .unknown
     }
@@ -1175,6 +1191,11 @@ extension LocalQuotaReader {
             "/opt/homebrew/bin/antigravity-usage",
             "/usr/local/bin/antigravity-usage",
         ]
+        // tokens.json is the npm reader's own login store, not a guess:
+        // the installed package (v0.2.9) builds exactly this path from its
+        // config directory (dist/index.js: getConfigDir + "tokens.json").
+        // Without it there is no saved login to refresh, and the remaining
+        // paths reach an interactive sign-in this reader must not start.
         let tokensPath = homeDirectory
             .appendingPathComponent("Library/Application Support/antigravity-usage/tokens.json").path
         return {
@@ -1269,11 +1290,33 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
     private var inFlight: Task<Outcome, Never>?
     private var lastGood: (at: Date, data: Data)?
 
-    public init(minimumInterval: TimeInterval = 3 * 60) {
-        self.minimumInterval = minimumInterval
+    public convenience init(minimumInterval: TimeInterval = 3 * 60) {
+        self.init(minimumInterval: minimumInterval, date: { Date() })
     }
 
-    func perform(now: Date, operation: @escaping @Sendable () async throws -> Data) async -> Outcome {
+    /// `date` stamps completed fetches; tests inject a controllable clock so
+    /// fetch duration is visible without wall-clock sleeps.
+    init(minimumInterval: TimeInterval, date: @escaping @Sendable () -> Date) {
+        self.minimumInterval = minimumInterval
+        self.date = date
+    }
+
+    private let date: @Sendable () -> Date
+
+    /// Test seam: invoked after a caller registers, outside the lock - `true`
+    /// when it joined the in-flight run, `false` when it owns a new run.
+    /// Lets tests prove a second caller arrived mid-run without sleeps.
+    var onRegister: (@Sendable (Bool) -> Void)?
+
+    /// Runs one shared operation.  `now` is the caller's clock for expiry
+    /// checks; fetched data is stamped with the completion time.  A result is
+    /// cached only when `isCacheable` accepts it, so bytes the caller will
+    /// reject as unreadable are never served back as a good fetch.
+    func perform(
+        now: Date,
+        operation: @escaping @Sendable () async throws -> Data,
+        isCacheable: (@Sendable (Data) -> Bool)? = nil
+    ) async -> Outcome {
         let task: Task<Outcome, Never>
         var isOwner = false
         lock.lock()
@@ -1288,19 +1331,34 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
                 }
             }
             let created = Task<Outcome, Never> {
-                do { return .fetched(try await operation(), at: now) }
-                catch { return .failed(error) }
+                do {
+                    let data = try await operation()
+                    return .fetched(data, at: date())
+                } catch {
+                    return .failed(error)
+                }
             }
             inFlight = created
             task = created
             isOwner = true
         }
         lock.unlock()
-        let outcome = await task.value
+        onRegister?(!isOwner)
+        // A cancelled caller must not wait out the CLI timeout, and a result
+        // nobody is left to consume must not become the cached good fetch.
+        let outcome = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
         if isOwner {
             lock.lock()
             inFlight = nil
-            if case .fetched(let data, _) = outcome { lastGood = (at: now, data: data) }
+            if case .fetched(let data, let at) = outcome,
+               !Task.isCancelled,
+               isCacheable?(data) ?? true {
+                lastGood = (at: at, data: data)
+            }
             lock.unlock()
         }
         return outcome

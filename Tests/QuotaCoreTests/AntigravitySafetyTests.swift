@@ -121,34 +121,66 @@ final class AntigravitySafetyTests: XCTestCase {
     }
 
     func testCoordinatorSharesConcurrentRunsAndCachesSuccess() async {
-        let coordinator = AntigravityRunCoordinator(minimumInterval: 300)
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        let clock = Locked<Date>(t0)
+        let coordinator = AntigravityRunCoordinator(minimumInterval: 300, date: { clock.withLock { $0 } })
         let runs = Locked<Int>(0)
+        let started = Gate()
+        let release = Gate()
+        let joined = Gate()
+        // Registration itself is the join proof: the coordinator reports each
+        // caller outside its lock, so no sleep decides when caller two arrives.
+        coordinator.onRegister = { joinedRun in if joinedRun { joined.open() } }
         let operation: @Sendable () async throws -> Data = {
             runs.withLock { $0 += 1 }
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            started.open()
+            await release.wait()
+            clock.withLock { $0 = $0.addingTimeInterval(5) }  // the fetch takes 5s
             return Data("ok".utf8)
         }
 
-        let t0 = Date(timeIntervalSince1970: 1_000)
-        async let a = coordinator.perform(now: t0, operation: operation)
-        async let b = coordinator.perform(now: t0, operation: operation)
-        async let c = coordinator.perform(now: t0, operation: operation)
-        let outcomes = await [a, b, c]
+        // The second caller provably arrives while the first fetch is still
+        // blocked: `joined` opens only when perform sees the in-flight run, so
+        // sharing is decided by the coordinator, never by timing or luck.
+        async let first = coordinator.perform(now: t0, operation: operation)
+        await started.wait()
+        async let second = coordinator.perform(now: t0, operation: operation)
+        await joined.wait()
+        release.open()
+        let firstOutcome = await first
+        let secondOutcome = await second
+        let fetchedAt = t0.addingTimeInterval(5)
+
         XCTAssertEqual(runs.withLock { $0 }, 1, "concurrent callers must share one CLI run")
-        for outcome in outcomes {
+        for outcome in [firstOutcome, secondOutcome] {
             guard case .fetched(let data, at: let at) = outcome else { return XCTFail("expected fetched, got \(outcome)") }
             XCTAssertEqual(data, Data("ok".utf8))
-            XCTAssertEqual(at, t0)
+            XCTAssertEqual(at, fetchedAt, "a fetch is stamped when it completes, not when it was asked for")
         }
 
         let cached = await coordinator.perform(now: t0.addingTimeInterval(60), operation: operation)
         XCTAssertEqual(runs.withLock { $0 }, 1, "a fresh success must be served from memory within the interval")
         guard case .cached(let data, at: let at) = cached else { return XCTFail("expected cached, got \(cached)") }
         XCTAssertEqual(data, Data("ok".utf8))
-        XCTAssertEqual(at, t0, "cached data must keep its real fetch time")
+        XCTAssertEqual(at, fetchedAt, "cached data must keep its real fetch time")
 
-        _ = await coordinator.perform(now: t0.addingTimeInterval(301), operation: operation)
+        _ = await coordinator.perform(now: t0.addingTimeInterval(310), operation: operation)
         XCTAssertEqual(runs.withLock { $0 }, 2, "an expired cache must trigger a fresh run")
+    }
+
+    func testCoordinatorNeverCachesOutputTheCallerRejects() async {
+        let coordinator = AntigravityRunCoordinator(minimumInterval: 300)
+        let runs = Locked<Int>(0)
+        let operation: @Sendable () async throws -> Data = {
+            runs.withLock { $0 += 1 }
+            return Data("not json".utf8)
+        }
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        let first = await coordinator.perform(now: t0, operation: operation, isCacheable: { _ in false })
+        guard case .fetched = first else { return XCTFail("expected fetched, got \(first)") }
+        let second = await coordinator.perform(now: t0.addingTimeInterval(1), operation: operation, isCacheable: { _ in false })
+        guard case .fetched = second else { return XCTFail("expected fetched, got \(second)") }
+        XCTAssertEqual(runs.withLock { $0 }, 2, "rejected output must be fetched again, not served from memory")
     }
 
     func testCoordinatorNeverCachesFailure() async {
@@ -175,7 +207,10 @@ final class AntigravitySafetyTests: XCTestCase {
         let reader = LocalQuotaReader(
             homeDirectory: root,
             now: { self.observedAt },
-            fetchJSON: { _ in throw URLError(.notConnectedToInternet) }
+            fetchJSON: { _ in throw URLError(.notConnectedToInternet) },
+            // Exercise the real runner factory, but never the process-wide
+            // coordinator: another reader's cached payload must not leak in.
+            antigravityCoordinator: AntigravityRunCoordinator(minimumInterval: 0)
         )
         let result = await reader.read()
         XCTAssertTrue(result.consentNeeded.contains("google-antigravity"), "expected google-antigravity consent, got \(result.consentNeeded)")
@@ -221,6 +256,35 @@ final class AntigravitySafetyTests: XCTestCase {
 }
 
 /// Minimal locked box so tests can count calls from @Sendable closures.
+/// A one-shot gate for deterministic concurrency tests: `wait()` suspends
+/// until `open()` is called, however long that takes on a loaded machine.
+private final class Gate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        lock.lock()
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        lock.unlock()
+        for waiter in pending { waiter.resume() }
+    }
+
+    func wait() async {
+        lock.lock()
+        if isOpen {
+            lock.unlock()
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+            lock.unlock()
+        }
+    }
+}
+
 private final class Locked<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Value
