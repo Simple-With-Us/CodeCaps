@@ -59,6 +59,12 @@ PROBE_SOURCES = ROOT / "ios" / "WidgetHomeScreenProbe"
 COMPANION_YML = ROOT / "ios" / "CodeCapsCompanion" / "project.yml"
 COMPANION_PROJECT = ROOT / "ios" / "CodeCapsCompanion" / "CodeCapsCompanion.xcodeproj"
 APP_ENTITLEMENTS = ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompanion.entitlements"
+# Debug launch argument asking the companion to resolve the App Group container
+# at startup and record the outcome in its data container (see
+# CodeCapsCompanionApp.swift WidgetProbeHooks).  Lets the probe distinguish
+# "entitlement not honored" from "the app never asked".
+PROBE_LAUNCH_ARGS = ["-CCWidgetProbeTouchGroupContainer"]
+PROBE_GROUP_MARKER = "cc-widget-probe-group-container.txt"
 WIDGET_ENTITLEMENTS = (
     ROOT / "ios" / "CodeCapsCompanion" / "Widgets" / "CodeCapsWidgets.entitlements"
 )
@@ -1122,7 +1128,7 @@ SPRINGBOARD_NOT_READY = ("SBMainWorkspace", "FBSOpenApplicationServiceErrorDomai
 def _launch(runner: ProcessRunner, udid: str, app_bundle: str) -> tuple[int, str]:
     code, output = 1, ""
     for attempt in range(1, LAUNCH_ATTEMPTS + 1):
-        code, output = runner.run(["xcrun", "simctl", "launch", udid, app_bundle], check=False)
+        code, output = runner.run(["xcrun", "simctl", "launch", udid, app_bundle, *PROBE_LAUNCH_ARGS], check=False)
         if code == 0 or not any(marker in output for marker in SPRINGBOARD_NOT_READY):
             return code, output
         if attempt < LAUNCH_ATTEMPTS:
@@ -1156,6 +1162,47 @@ def _wait_for_group_container(
         + (f"\n{last[-500:]}" if last else ""),
         EXIT_UNSUPPORTED,
     )
+
+
+def _read_group_marker(runner: ProcessRunner, udid: str, app_bundle: str) -> str | None:
+    """Read the companion debug marker saying whether containerURL resolved.
+
+    Returns the marker content ("NIL" or the container path), or None when the
+    marker never appeared (hook absent, app crashed, or container unreadable).
+    """
+    for _ in range(10):
+        code, output = runner.run(
+            ["xcrun", "simctl", "get_app_container", udid, app_bundle, "data"],
+            check=False,
+        )
+        if code == 0:
+            data = parse_data_container(output)
+            if data:
+                marker = Path(data) / "Documents" / PROBE_GROUP_MARKER
+                try:
+                    text = marker.read_text(encoding="utf-8").strip()
+                except OSError:
+                    text = ""
+                if text:
+                    return text
+        time.sleep(0.5)
+    return None
+
+
+def interpret_group_marker(marker: str | None) -> str | None:
+    """Explain a missing App Group container from the companion debug marker.
+
+    "NIL" proves the runtime refused the ad-hoc-signed App Group entitlement.
+    Any other content means containerURL resolved, so the container should
+    appear and the normal wait decides.  None is inconclusive.
+    """
+    if marker == "NIL":
+        return (
+            "companion reports containerURL(forSecurityApplicationGroupIdentifier:) "
+            "returned nil at launch: the ad-hoc-signed App Group entitlement was "
+            "not honored by this simulator runtime"
+        )
+    return None
 
 
 def _wait_for_container(
@@ -1300,7 +1347,15 @@ def execute(host: Host, work: Path) -> int:
                 f"failed: companion did not launch\n{launch_out[-1000:]}",
                 EXIT_FAILED,
             )
-        group = _wait_for_group_container(runner, udid, app_bundle, app_group)
+        marker = _read_group_marker(runner, udid, app_bundle)
+        try:
+            group = _wait_for_group_container(runner, udid, app_bundle, app_group)
+        except ProbeFailure as exc:
+            detail = interpret_group_marker(marker)
+            if detail:
+                base = exc.args[0] if exc.args else str(exc)
+                raise ProbeFailure(f"{base}\nwidget-homescreen: {detail}", EXIT_UNSUPPORTED) from exc
+            raise
         app_data = _wait_for_container(
             runner,
             ["xcrun", "simctl", "get_app_container", udid, app_bundle, "data"],

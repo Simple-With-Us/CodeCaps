@@ -20,6 +20,26 @@ final class CodeCapsNotificationDelegate: NSObject, UIApplicationDelegate {
 }
 #endif
 
+#if os(iOS) && DEBUG
+/// Debug-only support for scripts/test-widget-homescreen.sh.  When the probe
+/// launches the companion with -CCWidgetProbeTouchGroupContainer, resolve the
+/// App Group container once at startup (which asks the system to create it)
+/// and record the outcome in the app's data container, so the probe can tell
+/// "the entitlement was not honored" apart from "the app never asked".
+enum WidgetProbeHooks {
+    static func touchGroupContainerIfRequested() {
+        guard ProcessInfo.processInfo.arguments.contains("-CCWidgetProbeTouchGroupContainer") else { return }
+        let fm = FileManager.default
+        let resolved = fm.containerURL(forSecurityApplicationGroupIdentifier: CompanionQuotaModel.appGroupId)
+        let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        try? fm.createDirectory(at: documents, withIntermediateDirectories: true)
+        let marker = documents.appendingPathComponent("cc-widget-probe-group-container.txt")
+        try? (resolved?.path ?? "NIL").write(to: marker, atomically: true, encoding: .utf8)
+    }
+}
+#endif
+
 /// App entry point for the CodeCaps iOS companion application.
 @main
 struct CodeCapsCompanionApp: App {
@@ -32,6 +52,9 @@ struct CodeCapsCompanionApp: App {
 
     init() {
         SentryTelemetry.start()
+        #if os(iOS) && DEBUG
+        WidgetProbeHooks.touchGroupContainerIfRequested()
+        #endif
     }
 
     var body: some Scene {

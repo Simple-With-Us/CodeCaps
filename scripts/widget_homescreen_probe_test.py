@@ -46,6 +46,8 @@ from widget_homescreen_probe import (  # noqa: E402
     main,
     materialize_probe_project,
     outcome_code,
+    PROBE_LAUNCH_ARGS,
+    interpret_group_marker,
     parse_created_udid,
     parse_data_container,
     parse_devices_listing,
@@ -512,6 +514,20 @@ class CommandPlanTests(unittest.TestCase):
         self.assertIn(f"-only-testing:{PINNED_UI_TEST}", argv)
         self.assertIn("simctl", screenshot_argv(UDID, Path("/tmp/home-screen.png"))[1])
         self.assertIn("screenshot", screenshot_argv(UDID, Path("/tmp/home-screen.png")))
+
+    def test_probe_launch_args_single_dashed_flag(self):
+        self.assertEqual(PROBE_LAUNCH_ARGS, ["-CCWidgetProbeTouchGroupContainer"])
+
+    def test_interpret_group_marker_nil_proves_entitlement_refusal(self):
+        detail = interpret_group_marker("NIL")
+        self.assertIsNotNone(detail)
+        self.assertIn("nil", detail)
+
+    def test_interpret_group_marker_path_is_inconclusive(self):
+        self.assertIsNone(interpret_group_marker("/some/container/path"))
+
+    def test_interpret_group_marker_missing_is_inconclusive(self):
+        self.assertIsNone(interpret_group_marker(None))
 
     def test_created_udid_parser(self):
         self.assertEqual(parse_created_udid(f"  {UDID.lower()}\n"), UDID.lower())
