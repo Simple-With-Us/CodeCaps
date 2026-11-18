@@ -1128,7 +1128,7 @@ SPRINGBOARD_NOT_READY = ("SBMainWorkspace", "FBSOpenApplicationServiceErrorDomai
 def _launch(runner: ProcessRunner, udid: str, app_bundle: str) -> tuple[int, str]:
     code, output = 1, ""
     for attempt in range(1, LAUNCH_ATTEMPTS + 1):
-        code, output = runner.run(["xcrun", "simctl", "launch", udid, app_bundle, *PROBE_LAUNCH_ARGS], check=False)
+        code, output = runner.run(["xcrun", "simctl", "launch", "--terminate-running-process", udid, app_bundle, *PROBE_LAUNCH_ARGS], check=False)
         if code == 0 or not any(marker in output for marker in SPRINGBOARD_NOT_READY):
             return code, output
         if attempt < LAUNCH_ATTEMPTS:
@@ -1347,15 +1347,14 @@ def execute(host: Host, work: Path) -> int:
                 f"failed: companion did not launch\n{launch_out[-1000:]}",
                 EXIT_FAILED,
             )
-        marker = _read_group_marker(runner, udid, app_bundle)
         try:
             group = _wait_for_group_container(runner, udid, app_bundle, app_group)
         except ProbeFailure as exc:
+            marker = _read_group_marker(runner, udid, app_bundle)
             detail = interpret_group_marker(marker)
-            if detail:
-                base = exc.args[0] if exc.args else str(exc)
-                raise ProbeFailure(f"{base}\nwidget-homescreen: {detail}", EXIT_UNSUPPORTED) from exc
-            raise
+            note = detail or f"probe launch-hook marker state: {marker!r}"
+            base = exc.args[0] if exc.args else str(exc)
+            raise ProbeFailure(f"{base}\nwidget-homescreen: {note}", EXIT_UNSUPPORTED) from exc
         app_data = _wait_for_container(
             runner,
             ["xcrun", "simctl", "get_app_container", udid, app_bundle, "data"],
