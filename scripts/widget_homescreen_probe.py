@@ -1171,12 +1171,15 @@ def _wait_for_group_container(
     )
 
 
-def _read_group_marker(runner: ProcessRunner, udid: str, app_bundle: str) -> str | None:
+def _read_group_marker(runner: ProcessRunner, udid: str, app_bundle: str) -> tuple[str | None, str | None]:
     """Read the companion debug marker saying whether containerURL resolved.
 
-    Returns the marker content ("NIL" or the container path), or None when the
-    marker never appeared (hook absent, app crashed, or container unreadable).
+    Returns (marker content, app data container path).  The marker is "NIL"
+    or the group container path, or None when the marker never appeared
+    (hook absent, app crashed, or container unreadable);  the data path is
+    None only when the data container lookup never succeeded.
     """
+    data_seen = None
     for _ in range(10):
         code, output = runner.run(
             ["xcrun", "simctl", "get_app_container", udid, app_bundle, "data"],
@@ -1185,15 +1188,16 @@ def _read_group_marker(runner: ProcessRunner, udid: str, app_bundle: str) -> str
         if code == 0:
             data = parse_data_container(output)
             if data:
+                data_seen = data
                 marker = Path(data) / "Documents" / PROBE_GROUP_MARKER
                 try:
                     text = marker.read_text(encoding="utf-8").strip()
                 except OSError:
                     text = ""
                 if text:
-                    return text
+                    return text, data
         time.sleep(0.5)
-    return None
+    return None, data_seen
 
 
 def interpret_group_marker(marker: str | None) -> str | None:
@@ -1239,11 +1243,15 @@ def group_container_from_marker(
             / udid
             / "data/Containers/Shared/AppGroup"
         )
-    if anchor != candidate and anchor not in candidate.parents:
+    # Resolve both sides: a lexical parents check would wave through ".."
+    # segments and symlinks that escape the simulator's AppGroup area.
+    resolved_anchor = anchor.resolve()
+    resolved = candidate.resolve()
+    if resolved_anchor != resolved and resolved_anchor not in resolved.parents:
         return None
-    if not candidate.is_dir():
+    if not resolved.is_dir():
         return None
-    return str(candidate)
+    return str(resolved)
 
 
 def _wait_for_container(
@@ -1391,8 +1399,22 @@ def execute(host: Host, work: Path) -> int:
         try:
             group = _wait_for_group_container(runner, udid, app_bundle, app_group)
         except ProbeFailure as exc:
-            marker = _read_group_marker(runner, udid, app_bundle)
-            recovered = group_container_from_marker(marker, udid)
+            # A marker-read timeout raises ProbeFailure(EXIT_FAILED); it must
+            # never replace the original unsupported-path refusal and exit 78.
+            try:
+                marker, data_container = _read_group_marker(runner, udid, app_bundle)
+            except ProbeFailure:
+                marker, data_container = None, None
+            # Anchor on the located data container
+            # (.../Containers/Data/Application/<UUID> -> .../Containers) so
+            # SIMULATOR_HOST_HOME layouts work;  the runner home is only the
+            # fallback when no data container was ever found.
+            anchor = None
+            if data_container:
+                parents = Path(data_container).parents
+                if len(parents) >= 3:
+                    anchor = parents[2] / "Shared" / "AppGroup"
+            recovered = group_container_from_marker(marker, udid, anchor=anchor)
             if recovered:
                 print(
                     "widget-homescreen: simctl never reported the App Group "

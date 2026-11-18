@@ -527,6 +527,17 @@ class CommandPlanTests(unittest.TestCase):
         self.assertIn(PROBE_LAUNCH_ARGS[0], swift)
         self.assertIn("WidgetProbeHooks.touchGroupContainerIfRequested()", swift)
 
+    def test_swift_probe_uses_the_canonical_app_group_identifier(self):
+        group = read_app_group(WIDGET_ENTITLEMENTS)
+        model_src = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "Models" / "CompanionQuotaModel.swift").read_text(encoding="utf-8")
+        app_src = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompanionApp.swift").read_text(encoding="utf-8")
+        # One authoritative nonisolated constant carries the entitlements value.
+        self.assertIn(f'public let codeCapsAppGroupId = "{group}"', model_src)
+        self.assertIn("public static let appGroupId = codeCapsAppGroupId", model_src)
+        # The hook resolves that constant, never a second literal.
+        self.assertIn("containerURL(forSecurityApplicationGroupIdentifier: codeCapsAppGroupId)", app_src)
+        self.assertNotIn('forSecurityApplicationGroupIdentifier: "', app_src)
+
     def test_interpret_group_marker_nil_proves_entitlement_refusal(self):
         detail = interpret_group_marker("NIL")
         self.assertIsNotNone(detail)
@@ -546,8 +557,19 @@ class CommandPlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             anchor = Path(tmp) / "AppGroup"
             anchor.mkdir()
+            # An existing directory outside the anchor: only the containment
+            # check may reject it, never the later is_dir check.
             self.assertIsNone(
-                group_container_from_marker("/etc/passwd", "UDID", anchor=anchor)
+                group_container_from_marker(str(Path(tmp).parent), "UDID", anchor=anchor)
+            )
+
+    def test_group_container_from_marker_rejects_dotdot_escape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor = (Path(tmp) / "AppGroup").resolve()
+            anchor.mkdir()
+            escapee = anchor / ".." / ".." / "escaped"
+            self.assertIsNone(
+                group_container_from_marker(str(escapee), "UDID", anchor=anchor)
             )
 
     def test_group_container_from_marker_requires_an_existing_directory(self):
@@ -566,7 +588,7 @@ class CommandPlanTests(unittest.TestCase):
             container.mkdir(parents=True)
             self.assertEqual(
                 group_container_from_marker(str(container), "UDID", anchor=anchor),
-                str(container),
+                str(container.resolve()),
             )
 
     def test_created_udid_parser(self):
