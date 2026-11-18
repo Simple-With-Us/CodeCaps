@@ -1161,7 +1161,7 @@ public enum WidgetPresentation {
             guard trimmedLabel != "plan details",
                   !(trimmedLabel == "plan" && w.remainingPercent == nil) else { continue }
             let parsedReset = parseDate(from: w.resetAt)
-            let observed = reading.reportedAt
+            let observed = parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt)
             let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let pct = w.remainingPercent
             // The one shared rule decides, as it does on the phone and on the
