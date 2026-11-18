@@ -1161,7 +1161,7 @@ public enum WidgetPresentation {
             guard trimmedLabel != "plan details",
                   !(trimmedLabel == "plan" && w.remainingPercent == nil) else { continue }
             let parsedReset = parseDate(from: w.resetAt)
-            let observed = parseDate(from: w.occurredAt)
+            let observed = reading.reportedAt
             let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let pct = w.remainingPercent
             // The one shared rule decides, as it does on the phone and on the
@@ -1434,7 +1434,7 @@ public enum WidgetPresentation {
                 resetAt: parseDate(from: w.resetAt),
                 isExhausted: QuotaCapRule.isExhausted(remainingPercent: w.remainingPercent,
                                                       providerSaysExhausted: w.isExhausted ?? false),
-                observedAt: parseDate(from: w.occurredAt),
+                observedAt: parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt),
                 isModelDetail: true
             ))
         }
