@@ -1290,6 +1290,7 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
     private var inFlight: Task<Outcome, Never>?
     private var lastGood: (at: Date, data: Data)?
     private var waiters = 0
+    private var generation = 0
 
     public convenience init(minimumInterval: TimeInterval = 3 * 60) {
         self.init(minimumInterval: minimumInterval, date: { Date() })
@@ -1308,6 +1309,11 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
     /// when it joined the in-flight run, `false` when it owns a new run.
     /// Lets tests prove a second caller arrived mid-run without sleeps.
     var onRegister: (@Sendable (Bool) -> Void)?
+
+    /// Test seam: invoked after the shared run's outcome arrives and before
+    /// the caller's bookkeeping, `true` for the owner.  Lets tests park a
+    /// finished caller between completion and bookkeeping without timing.
+    var beforeBookkeeping: (@Sendable (Bool) async -> Void)?
 
     /// Runs one shared operation.  `now` is the caller's clock for expiry
     /// checks; fetched data is stamped with the completion time.  A result is
@@ -1344,7 +1350,9 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
             task = created
             isOwner = true
             waiters = 1
+            generation += 1
         }
+        let gen = generation
         lock.unlock()
         onRegister?(!isOwner)
         // The owner's cancellation kills the shared CLI run;  a joining
@@ -1355,18 +1363,26 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
             await task.value
         } onCancel: {
             lock.lock()
-            let lastOne = waiters <= 1
+            // A caller whose run has already rotated out must not count
+            // itself against the generation that replaced it.
+            let lastOne = gen == generation && waiters <= 1
             lock.unlock()
             if isOwner || lastOne { task.cancel() }
         }
+        await beforeBookkeeping?(isOwner)
         lock.lock()
-        waiters = max(0, waiters - 1)
-        if isOwner {
-            inFlight = nil
-            if case .fetched(let data, let at) = outcome,
-               !Task.isCancelled,
-               isCacheable?(data) ?? true {
-                lastGood = (at: at, data: data)
+        // Bookkeeping applies only to the run this caller joined.  A caller
+        // whose outcome arrived before a new run started must not decrement
+        // the new run's waiters or clear its slot.
+        if gen == generation {
+            waiters = max(0, waiters - 1)
+            if isOwner {
+                inFlight = nil
+                if case .fetched(let data, let at) = outcome,
+                   !Task.isCancelled,
+                   isCacheable?(data) ?? true {
+                    lastGood = (at: at, data: data)
+                }
             }
         }
         lock.unlock()

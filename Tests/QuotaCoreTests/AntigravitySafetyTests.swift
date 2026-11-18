@@ -226,6 +226,80 @@ final class AntigravitySafetyTests: XCTestCase {
         XCTAssertEqual(runs.withLock { $0 }, 2, "a cancelled owner leaves nothing cached; the next call reruns")
     }
 
+    func testStaleJoinerBookkeepingCannotShrinkANewRun() async {
+        let t0 = Date(timeIntervalSince1970: 4_000)
+        let coordinator = AntigravityRunCoordinator(minimumInterval: 0, date: { t0 })
+        let startedA = Gate()
+        let releaseA = Gate()
+        let startedB = Gate()
+        let releaseB = Gate()
+        let joinedA = Gate()
+        let joinedB = Gate()
+        let joinerParked = Gate()
+        let holdJoiner = Gate()
+        let runs = Locked<Int>(0)
+        let joinedCount = Locked<Int>(0)
+        coordinator.onRegister = { joinedRun in
+            guard joinedRun else { return }
+            let n = joinedCount.withLock { $0 += 1; return $0 }
+            if n == 1 { joinedA.open() } else { joinedB.open() }
+        }
+        let parkedCount = Locked<Int>(0)
+        coordinator.beforeBookkeeping = { isOwner in
+            guard !isOwner else { return }
+            let n = parkedCount.withLock { $0 += 1; return $0 }
+            if n == 1 {
+                joinerParked.open()
+                await holdJoiner.wait()
+            }
+        }
+        let operation: @Sendable () async throws -> Data = {
+            let n = runs.withLock { $0 += 1; return $0 }
+            if n == 1 {
+                startedA.open()
+                await releaseA.wait()
+                return Data("ok-A".utf8)
+            }
+            startedB.open()
+            await releaseB.wait()
+            try Task.checkCancellation()
+            return Data("ok-B".utf8)
+        }
+
+        let ownerA = Task { await coordinator.perform(now: t0, operation: operation) }
+        await startedA.wait()
+        let joinerA = Task { await coordinator.perform(now: t0, operation: operation) }
+        await joinedA.wait()
+        releaseA.open()
+        // The old joiner's outcome has arrived but it is parked before its
+        // bookkeeping; the owner drains and clears the run meanwhile.
+        await joinerParked.wait()
+        let outcomeA = await ownerA.value
+        guard case .fetched = outcomeA else { return XCTFail("expected fetched, got \(outcomeA)") }
+
+        let ownerB = Task { await coordinator.perform(now: t0, operation: operation) }
+        await startedB.wait()
+        let joinerB = Task { await coordinator.perform(now: t0, operation: operation) }
+        await joinedB.wait()
+
+        // The stale joiner now runs its bookkeeping against the new run's
+        // counters; it must not shrink them.
+        holdJoiner.open()
+        _ = await joinerA.value
+
+        // With the counter shrunk, this cancellation would look like the last
+        // waiter leaving and would kill the new run under its owner.
+        joinerB.cancel()
+        releaseB.open()
+        let outcomeB = await ownerB.value
+        guard case .fetched(let data, at: _) = outcomeB else {
+            return XCTFail("stale joiner bookkeeping let a joiner cancel the new run, got \(outcomeB)")
+        }
+        XCTAssertEqual(data, Data("ok-B".utf8))
+        _ = await joinerB.value
+        XCTAssertEqual(runs.withLock { $0 }, 2, "the new run must complete exactly once")
+    }
+
     func testCoordinatorNeverCachesOutputTheCallerRejects() async {
         let coordinator = AntigravityRunCoordinator(minimumInterval: 300)
         let runs = Locked<Int>(0)
