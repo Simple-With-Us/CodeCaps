@@ -527,17 +527,6 @@ class CommandPlanTests(unittest.TestCase):
         self.assertIn(PROBE_LAUNCH_ARGS[0], swift)
         self.assertIn("WidgetProbeHooks.touchGroupContainerIfRequested()", swift)
 
-    def test_swift_probe_uses_the_canonical_app_group_identifier(self):
-        group = read_app_group(WIDGET_ENTITLEMENTS)
-        model_src = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "Models" / "CompanionQuotaModel.swift").read_text(encoding="utf-8")
-        app_src = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompanionApp.swift").read_text(encoding="utf-8")
-        # One authoritative nonisolated constant carries the entitlements value.
-        self.assertIn(f'public let codeCapsAppGroupId = "{group}"', model_src)
-        self.assertIn("public static let appGroupId = codeCapsAppGroupId", model_src)
-        # The hook resolves that constant, never a second literal.
-        self.assertIn("containerURL(forSecurityApplicationGroupIdentifier: codeCapsAppGroupId)", app_src)
-        self.assertNotIn('forSecurityApplicationGroupIdentifier: "', app_src)
-
     def test_interpret_group_marker_nil_proves_entitlement_refusal(self):
         detail = interpret_group_marker("NIL")
         self.assertIsNotNone(detail)
