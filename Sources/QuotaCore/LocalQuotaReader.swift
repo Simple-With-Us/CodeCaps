@@ -38,6 +38,7 @@ public struct LocalQuotaReader: Sendable {
     private let readClaudeCredential: @Sendable () async -> ClaudeCredentialAccess
     private let renewClaudeLogin: @Sendable () async -> Void
     private let renewalThrottle: ClaudeRenewalThrottle
+    private let antigravityCoordinator: AntigravityRunCoordinator
     private let claudeKeychainTimeout: TimeInterval
     private let claudeProfileTimeout: TimeInterval
 
@@ -59,6 +60,7 @@ public struct LocalQuotaReader: Sendable {
         readClaudeCredential: (@Sendable () async -> ClaudeCredentialAccess)? = nil,
         renewClaudeLogin: (@Sendable () async -> Void)? = nil,
         renewalThrottle: ClaudeRenewalThrottle = .shared,
+        antigravityCoordinator: AntigravityRunCoordinator? = nil,
         claudeKeychainTimeout: TimeInterval = ClaudeCredentialSource.boundedAccessTimeout,
         claudeProfileTimeout: TimeInterval = 1
     ) {
@@ -75,6 +77,11 @@ public struct LocalQuotaReader: Sendable {
             self.renewClaudeLogin = Self.makeClaudeRenewer(homeDirectory: self.homeDirectory)
         } else { self.renewClaudeLogin = {} }
         self.renewalThrottle = renewalThrottle
+        // An injected runner belongs to an offline test, which must never see
+        // process-wide state; production shares one coordinator so concurrent
+        // refreshes cannot overlap two CLI invocations.
+        self.antigravityCoordinator = antigravityCoordinator
+            ?? (runAntigravity == nil ? .shared : AntigravityRunCoordinator(minimumInterval: 0))
         self.claudeKeychainTimeout = claudeKeychainTimeout
         self.claudeProfileTimeout = claudeProfileTimeout.isFinite ? min(1, max(0.001, claudeProfileTimeout)) : 1
     }
@@ -82,7 +89,10 @@ public struct LocalQuotaReader: Sendable {
     /// Reads all configured local sources concurrently.  This method never
     /// refreshes OAuth credentials itself and never posts telemetry.  The one
     /// exception is asking Claude Code to recover its own unavailable login, which
-    /// Claude Code performs and writes on its own.
+    /// Claude Code performs and writes on its own.  The Antigravity handoff runs
+    /// only the npm `antigravity-usage` reader backed by its own saved login - a
+    /// silent HTTPS token refresh - and never a sign-in-capable CLI; without that
+    /// login the provider reports a consent need instead of spawning anything.
     public func read() async -> LocalQuotaResult {
         await withTaskGroup(of: ProviderRead.self, returning: LocalQuotaResult.self) { group in
             for provider in Provider.allCases {
@@ -507,14 +517,27 @@ public struct LocalQuotaReader: Sendable {
 
     private func readAntigravity() async throws -> ProviderRead {
         let provider = Provider.antigravity
-        let data = try await runAntigravity()
-        guard data.count <= Self.maxProcessOutputBytes,
-              let object = try? JSONSerialization.jsonObject(with: data) else {
+        let outcome = await antigravityCoordinator.perform(now: now(), operation: { try await self.runAntigravity() })
+        let data: Data
+        let observedAt: Date
+        switch outcome {
+        case .fetched(let fetched, let at), .cached(let fetched, let at):
+            data = fetched
+            observedAt = at
+        case .failed(let error):
+            if error is CancellationError { throw CancellationError() }
+            if let failure = error as? LocalReaderError, failure == .interactiveSignInRequired {
+                return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Antigravity quota", observedAt: now())], issue: failure.message, needsConsent: true)
+            }
             return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Antigravity quota", observedAt: now())], issue: "Antigravity quota output was unavailable.")
         }
-        let windows = parseAntigravity(object, observedAt: now())
+        guard data.count <= Self.maxProcessOutputBytes,
+              let object = try? JSONSerialization.jsonObject(with: data) else {
+            return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Antigravity quota", observedAt: observedAt)], issue: "Antigravity quota output was unavailable.")
+        }
+        let windows = parseAntigravity(object, observedAt: observedAt)
         guard !windows.isEmpty else {
-            return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Antigravity quota", observedAt: now())], issue: "Antigravity returned no readable quota windows.")
+            return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Antigravity quota", observedAt: observedAt)], issue: "Antigravity returned no readable quota windows.")
         }
         return ProviderRead(provider: provider, windows: windows, issue: nil)
     }
@@ -572,9 +595,9 @@ private struct ProviderRead: Sendable {
 }
 
 private enum LocalReaderError: Error {
-    case unavailable, malformed, reauth
+    case unavailable, malformed, reauth, interactiveSignInRequired
     var message: String {
-        switch self { case .unavailable: return "Quota source is unavailable."; case .malformed: return "Quota response was unavailable."; case .reauth: return "This account needs you to sign in again." }
+        switch self { case .unavailable: return "Quota source is unavailable."; case .malformed: return "Quota response was unavailable."; case .reauth: return "This account needs you to sign in again."; case .interactiveSignInRequired: return "Antigravity needs a one-time interactive sign-in that CodeCaps will not start in the background. Run `antigravity-usage login` in a terminal (or open Antigravity), and its quota returns on the next refresh." }
     }
 }
 
@@ -1114,17 +1137,63 @@ private extension LocalQuotaReader {
         }
     }
 
-    static func makeAntigravityRunner(homeDirectory: URL) -> @Sendable () async throws -> Data {
+}
+
+extension LocalQuotaReader {
+    /// Reads only the head of a candidate `antigravity-usage` executable to
+    /// decide what spawning it can do.  The retired CC-234 bridge forwards to
+    /// the `agy` CLI, which drops into an interactive sign-in - opening the
+    /// default browser - when two invocations overlap or its saved login is
+    /// rejected, and a background quota poll has nowhere to put that flow.
+    /// The npm `antigravity-usage` reader's quota subcommand only prints and
+    /// exits non-zero in those states (verified against v0.2.9), so it is the
+    /// only kind a background refresh may run.
+    ///
+    /// Marker text alone is not trusted: a hand-written wrapper can copy a
+    /// node shebang and the package name.  A reader candidate must also
+    /// resolve (following symlinks) into a directory named `antigravity-usage`
+    /// - the npm global package layout - so a stray script or wrapper named
+    /// `antigravity-usage` in a bin directory is treated as sign-in-capable
+    /// and skipped, as is anything else unrecognized.
+    static func antigravityCLIKind(at path: String) -> AntigravityCLIKind {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return .unknown }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 16_384),
+              let text = String(data: head, encoding: .utf8) else { return .unknown }
+        if text.contains("CC-234 quota bridge") { return .agyBridge }
+        guard text.hasPrefix("#!/usr/bin/env node"), text.contains("antigravity-usage") else { return .unknown }
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        return resolved.dropLast().contains("antigravity-usage") ? .npmReader : .unknown
+    }
+
+    static func makeAntigravityRunner(
+        homeDirectory: URL,
+        spawn: (@Sendable (String, [String], URL) async throws -> Data)? = nil
+    ) -> @Sendable () async throws -> Data {
         let candidates = [
             homeDirectory.appendingPathComponent(".local/bin/antigravity-usage").path,
             "/opt/homebrew/bin/antigravity-usage",
             "/usr/local/bin/antigravity-usage",
         ]
+        let tokensPath = homeDirectory
+            .appendingPathComponent("Library/Application Support/antigravity-usage/tokens.json").path
         return {
-            guard let path = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { throw LocalReaderError.unavailable }
-            return try await BoundedQuotaProcess().run(
-                path: path, arguments: ["quota", "--json", "--refresh"], home: homeDirectory,
-                timeout: processTimeout, maxBytes: maxProcessOutputBytes)
+            var foundCLI = false
+            for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
+                foundCLI = true
+                guard Self.antigravityCLIKind(at: path) == .npmReader else { continue }
+                // The npm reader refreshes its own saved tokens silently over
+                // HTTPS.  Without that saved login the only remaining paths
+                // reach an interactive sign-in, so stop before spawning.
+                guard FileManager.default.fileExists(atPath: tokensPath) else {
+                    throw LocalReaderError.interactiveSignInRequired
+                }
+                if let spawn { return try await spawn(path, ["quota", "--json", "--refresh"], homeDirectory) }
+                return try await BoundedQuotaProcess().run(
+                    path: path, arguments: ["quota", "--json", "--refresh"], home: homeDirectory,
+                    timeout: processTimeout, maxBytes: maxProcessOutputBytes)
+            }
+            throw foundCLI ? LocalReaderError.interactiveSignInRequired : LocalReaderError.unavailable
         }
     }
 }
@@ -1177,4 +1246,69 @@ public final class ClaudeRenewalThrottle: @unchecked Sendable {
         }
         return true
     }
+}
+
+
+/// Keeps background Antigravity quota reads from overlapping two CLI
+/// invocations or respawning on every tick: concurrent callers join the one
+/// in-flight run, and a run that succeeded less than `minimumInterval` ago is
+/// served from memory with its real fetch time.  Failures are never cached,
+/// so the next tick tries again.  The default instance is process-wide; tests
+/// pass their own.
+public final class AntigravityRunCoordinator: @unchecked Sendable {
+    public static let shared = AntigravityRunCoordinator()
+
+    enum Outcome {
+        case fetched(Data, at: Date)
+        case cached(Data, at: Date)
+        case failed(Error)
+    }
+
+    public let minimumInterval: TimeInterval
+    private let lock = NSLock()
+    private var inFlight: Task<Outcome, Never>?
+    private var lastGood: (at: Date, data: Data)?
+
+    public init(minimumInterval: TimeInterval = 3 * 60) {
+        self.minimumInterval = minimumInterval
+    }
+
+    func perform(now: Date, operation: @escaping @Sendable () async throws -> Data) async -> Outcome {
+        let task: Task<Outcome, Never>
+        var isOwner = false
+        lock.lock()
+        if let running = inFlight {
+            task = running
+        } else {
+            if let lastGood {
+                let elapsed = now.timeIntervalSince(lastGood.at)
+                if elapsed >= 0, elapsed < minimumInterval {
+                    lock.unlock()
+                    return .cached(lastGood.data, at: lastGood.at)
+                }
+            }
+            let created = Task<Outcome, Never> {
+                do { return .fetched(try await operation(), at: now) }
+                catch { return .failed(error) }
+            }
+            inFlight = created
+            task = created
+            isOwner = true
+        }
+        lock.unlock()
+        let outcome = await task.value
+        if isOwner {
+            lock.lock()
+            inFlight = nil
+            if case .fetched(let data, _) = outcome { lastGood = (at: now, data: data) }
+            lock.unlock()
+        }
+        return outcome
+    }
+}
+
+/// What a candidate `antigravity-usage` executable is safe for; see
+/// `LocalQuotaReader.antigravityCLIKind(at:)`.
+enum AntigravityCLIKind: Equatable {
+    case npmReader, agyBridge, unknown
 }
