@@ -548,7 +548,8 @@ final class MonitorModel: ObservableObject {
     var shareFeedStaleHelp: String {
         let last = lastSyncTime.map { $0.formatted(date: .omitted, time: .shortened) } ?? "never"
         if let error = lastSyncError {
-            return "iPhone feed stale, last push \(last)." + sentenceGap + error
+            let state = isShareFeedStale ? "stale" : "sync error"
+            return "iPhone feed \(state), last push \(last)." + sentenceGap + error
                 + sentenceGap + "Click for Sync settings."
         }
         return "iPhone feed stale, last push \(last)." + sentenceGap + "Click for Sync settings."
