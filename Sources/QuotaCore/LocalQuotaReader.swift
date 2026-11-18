@@ -1289,6 +1289,7 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
     private let lock = NSLock()
     private var inFlight: Task<Outcome, Never>?
     private var lastGood: (at: Date, data: Data)?
+    private var waiters = 0
 
     public convenience init(minimumInterval: TimeInterval = 3 * 60) {
         self.init(minimumInterval: minimumInterval, date: { Date() })
@@ -1322,6 +1323,7 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
         lock.lock()
         if let running = inFlight {
             task = running
+            waiters += 1
         } else {
             if let lastGood {
                 let elapsed = now.timeIntervalSince(lastGood.at)
@@ -1341,26 +1343,33 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
             inFlight = created
             task = created
             isOwner = true
+            waiters = 1
         }
         lock.unlock()
         onRegister?(!isOwner)
-        // A cancelled caller must not wait out the CLI timeout, and a result
-        // nobody is left to consume must not become the cached good fetch.
+        // The owner's cancellation kills the shared CLI run;  a joining
+        // caller's cancellation leaves it alive for the callers that remain.
+        // A result nobody is left to consume must not become the cached good
+        // fetch.
         let outcome = await withTaskCancellationHandler {
             await task.value
         } onCancel: {
-            task.cancel()
-        }
-        if isOwner {
             lock.lock()
+            let lastOne = waiters <= 1
+            lock.unlock()
+            if isOwner || lastOne { task.cancel() }
+        }
+        lock.lock()
+        waiters = max(0, waiters - 1)
+        if isOwner {
             inFlight = nil
             if case .fetched(let data, let at) = outcome,
                !Task.isCancelled,
                isCacheable?(data) ?? true {
                 lastGood = (at: at, data: data)
             }
-            lock.unlock()
         }
+        lock.unlock()
         return outcome
     }
 }

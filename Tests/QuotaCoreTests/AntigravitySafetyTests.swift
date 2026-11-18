@@ -168,6 +168,64 @@ final class AntigravitySafetyTests: XCTestCase {
         XCTAssertEqual(runs.withLock { $0 }, 2, "an expired cache must trigger a fresh run")
     }
 
+    func testJoinerCancellationLeavesTheSharedRunAlive() async {
+        let t0 = Date(timeIntervalSince1970: 2_000)
+        let clock = Locked<Date>(t0)
+        let coordinator = AntigravityRunCoordinator(minimumInterval: 300, date: { clock.withLock { $0 } })
+        let started = Gate()
+        let release = Gate()
+        let joined = Gate()
+        coordinator.onRegister = { joinedRun in if joinedRun { joined.open() } }
+        let runs = Locked<Int>(0)
+        let operation: @Sendable () async throws -> Data = {
+            runs.withLock { $0 += 1 }
+            started.open()
+            await release.wait()
+            return Data("ok".utf8)
+        }
+
+        async let first = coordinator.perform(now: t0, operation: operation)
+        await started.wait()
+        let joiner = Task { await coordinator.perform(now: t0, operation: operation) }
+        await joined.wait()  // the joiner provably shares the blocked run
+        joiner.cancel()
+        release.open()
+
+        let firstOutcome = await first
+        guard case .fetched(let data, at: _) = firstOutcome else { return XCTFail("expected fetched, got \(firstOutcome)") }
+        XCTAssertEqual(data, Data("ok".utf8), "a joining caller's cancellation must not kill the shared run")
+        _ = await joiner.value
+
+        let cached = await coordinator.perform(now: t0.addingTimeInterval(60), operation: operation)
+        guard case .cached = cached else { return XCTFail("the completed run must still be cached, got \(cached)") }
+        XCTAssertEqual(runs.withLock { $0 }, 1, "no second CLI run may appear")
+    }
+
+    func testOwnerCancellationStopsTheSharedRunAndCachesNothing() async {
+        let t0 = Date(timeIntervalSince1970: 3_000)
+        let coordinator = AntigravityRunCoordinator(minimumInterval: 300, date: { t0 })
+        let started = Gate()
+        let runs = Locked<Int>(0)
+        let operation: @Sendable () async throws -> Data = {
+            let n = runs.withLock { $0 += 1; return $0 }
+            started.open()
+            // The first run stands in for a long CLI invocation: it completes
+            // only when its task is cancelled, never by timing out the test.
+            if n == 1 { try await Task.sleep(nanoseconds: 600_000_000_000) }
+            return Data("ok".utf8)
+        }
+
+        let owner = Task { await coordinator.perform(now: t0, operation: operation) }
+        await started.wait()
+        owner.cancel()
+        let outcome = await owner.value
+        guard case .failed = outcome else { return XCTFail("expected failure after owner cancel, got \(outcome)") }
+
+        let second = await coordinator.perform(now: t0.addingTimeInterval(1), operation: operation)
+        guard case .fetched = second else { return XCTFail("expected a fresh run after the cancelled owner, got \(second)") }
+        XCTAssertEqual(runs.withLock { $0 }, 2, "a cancelled owner leaves nothing cached; the next call reruns")
+    }
+
     func testCoordinatorNeverCachesOutputTheCallerRejects() async {
         let coordinator = AntigravityRunCoordinator(minimumInterval: 300)
         let runs = Locked<Int>(0)
