@@ -48,6 +48,7 @@ from widget_homescreen_probe import (  # noqa: E402
     outcome_code,
     PROBE_LAUNCH_ARGS,
     interpret_group_marker,
+    launch_argv,
     parse_created_udid,
     parse_data_container,
     parse_devices_listing,
@@ -515,8 +516,15 @@ class CommandPlanTests(unittest.TestCase):
         self.assertIn("simctl", screenshot_argv(UDID, Path("/tmp/home-screen.png"))[1])
         self.assertIn("screenshot", screenshot_argv(UDID, Path("/tmp/home-screen.png")))
 
-    def test_probe_launch_args_single_dashed_flag(self):
-        self.assertEqual(PROBE_LAUNCH_ARGS, ["-CCWidgetProbeTouchGroupContainer"])
+    def test_launch_argv_carries_probe_flag_on_a_fresh_process(self):
+        argv = launch_argv("UDID-1", "com.example.app")
+        self.assertEqual(argv[:4], ["xcrun", "simctl", "launch", "--terminate-running-process"])
+        self.assertEqual(argv[-2:], ["com.example.app", PROBE_LAUNCH_ARGS[0]])
+
+    def test_swift_hook_uses_the_same_probe_flag(self):
+        swift = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompanionApp.swift").read_text(encoding="utf-8")
+        self.assertIn(PROBE_LAUNCH_ARGS[0], swift)
+        self.assertIn("WidgetProbeHooks.touchGroupContainerIfRequested()", swift)
 
     def test_interpret_group_marker_nil_proves_entitlement_refusal(self):
         detail = interpret_group_marker("NIL")

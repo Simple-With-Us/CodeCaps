@@ -1125,10 +1125,17 @@ LAUNCH_RETRY_SECONDS = 15
 SPRINGBOARD_NOT_READY = ("SBMainWorkspace", "FBSOpenApplicationServiceErrorDomain")
 
 
+def launch_argv(udid: str, app_bundle: str) -> list[str]:
+    # --terminate-running-process guarantees a fresh process: simctl launch on
+    # an already-running app returns the old pid and silently drops arguments,
+    # which would skip the probe hook in the companion.
+    return ["xcrun", "simctl", "launch", "--terminate-running-process", udid, app_bundle, *PROBE_LAUNCH_ARGS]
+
+
 def _launch(runner: ProcessRunner, udid: str, app_bundle: str) -> tuple[int, str]:
     code, output = 1, ""
     for attempt in range(1, LAUNCH_ATTEMPTS + 1):
-        code, output = runner.run(["xcrun", "simctl", "launch", "--terminate-running-process", udid, app_bundle, *PROBE_LAUNCH_ARGS], check=False)
+        code, output = runner.run(launch_argv(udid, app_bundle), check=False)
         if code == 0 or not any(marker in output for marker in SPRINGBOARD_NOT_READY):
             return code, output
         if attempt < LAUNCH_ATTEMPTS:
