@@ -1212,6 +1212,40 @@ def interpret_group_marker(marker: str | None) -> str | None:
     return None
 
 
+def group_container_from_marker(
+    marker: str | None,
+    udid: str,
+    anchor: Path | None = None,
+) -> str | None:
+    """Recover the App Group container from the companion launch-hook marker.
+
+    Hosted runners can leave ``simctl get_app_container`` blind to a group
+    container the runtime itself resolved:  the companion's
+    containerURL(forSecurityApplicationGroupIdentifier:) returned a real
+    path, yet the host lookup stays empty (observed on the v3 probe run,
+    job 134635720780).  Trust the marker only when it names an existing
+    directory inside this simulator's own AppGroup area;  anything else
+    keeps the honest refusal.
+    """
+    if not marker or marker == "NIL":
+        return None
+    candidate = Path(marker.splitlines()[0].strip())
+    if not candidate.is_absolute():
+        return None
+    if anchor is None:
+        anchor = (
+            Path.home()
+            / "Library/Developer/CoreSimulator/Devices"
+            / udid
+            / "data/Containers/Shared/AppGroup"
+        )
+    if anchor != candidate and anchor not in candidate.parents:
+        return None
+    if not candidate.is_dir():
+        return None
+    return str(candidate)
+
+
 def _wait_for_container(
     runner: ProcessRunner,
     argv: list[str],
@@ -1358,10 +1392,20 @@ def execute(host: Host, work: Path) -> int:
             group = _wait_for_group_container(runner, udid, app_bundle, app_group)
         except ProbeFailure as exc:
             marker = _read_group_marker(runner, udid, app_bundle)
-            detail = interpret_group_marker(marker)
-            note = detail or f"probe launch-hook marker state: {marker!r}"
-            base = exc.args[0] if exc.args else str(exc)
-            raise ProbeFailure(f"{base}\nwidget-homescreen: {note}", EXIT_UNSUPPORTED) from exc
+            recovered = group_container_from_marker(marker, udid)
+            if recovered:
+                print(
+                    "widget-homescreen: simctl never reported the App Group "
+                    "container; using the companion-reported path verified on "
+                    f"this simulator: {recovered}",
+                    flush=True,
+                )
+                group = recovered
+            else:
+                detail = interpret_group_marker(marker)
+                note = detail or f"probe launch-hook marker state: {marker!r}"
+                base = exc.args[0] if exc.args else str(exc)
+                raise ProbeFailure(f"{base}\nwidget-homescreen: {note}", EXIT_UNSUPPORTED) from exc
         app_data = _wait_for_container(
             runner,
             ["xcrun", "simctl", "get_app_container", udid, app_bundle, "data"],

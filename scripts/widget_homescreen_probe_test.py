@@ -47,6 +47,7 @@ from widget_homescreen_probe import (  # noqa: E402
     materialize_probe_project,
     outcome_code,
     PROBE_LAUNCH_ARGS,
+    group_container_from_marker,
     interpret_group_marker,
     launch_argv,
     parse_created_udid,
@@ -536,6 +537,37 @@ class CommandPlanTests(unittest.TestCase):
 
     def test_interpret_group_marker_missing_is_inconclusive(self):
         self.assertIsNone(interpret_group_marker(None))
+
+    def test_group_container_from_marker_rejects_nil_and_missing(self):
+        self.assertIsNone(group_container_from_marker("NIL", "UDID"))
+        self.assertIsNone(group_container_from_marker(None, "UDID"))
+
+    def test_group_container_from_marker_rejects_paths_outside_the_simulator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor = Path(tmp) / "AppGroup"
+            anchor.mkdir()
+            self.assertIsNone(
+                group_container_from_marker("/etc/passwd", "UDID", anchor=anchor)
+            )
+
+    def test_group_container_from_marker_requires_an_existing_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor = Path(tmp) / "AppGroup"
+            anchor.mkdir()
+            missing = anchor / "DEADBEEF-0000-0000-0000-000000000000"
+            self.assertIsNone(
+                group_container_from_marker(str(missing), "UDID", anchor=anchor)
+            )
+
+    def test_group_container_from_marker_accepts_a_real_container(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor = Path(tmp) / "AppGroup"
+            container = anchor / "FCBF06D2-F193-45AA-BFE3-758F717C35FB"
+            container.mkdir(parents=True)
+            self.assertEqual(
+                group_container_from_marker(str(container), "UDID", anchor=anchor),
+                str(container),
+            )
 
     def test_created_udid_parser(self):
         self.assertEqual(parse_created_udid(f"  {UDID.lower()}\n"), UDID.lower())
