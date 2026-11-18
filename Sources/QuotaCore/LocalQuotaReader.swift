@@ -1315,6 +1315,27 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
     /// finished caller between completion and bookkeeping without timing.
     var beforeBookkeeping: (@Sendable (Bool) async -> Void)?
 
+    /// Resume-once box: a cancelled joiner returns promptly while the shared
+    /// run keeps going for the callers that remain.
+    private final class OutcomeBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Outcome, Never>?
+
+        func arm(_ continuation: CheckedContinuation<Outcome, Never>) {
+            lock.lock()
+            self.continuation = continuation
+            lock.unlock()
+        }
+
+        func resume(with outcome: Outcome) {
+            lock.lock()
+            let continuation = continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume(returning: outcome)
+        }
+    }
+
     /// Runs one shared operation.  `now` is the caller's clock for expiry
     /// checks; fetched data is stamped with the completion time.  A result is
     /// cached only when `isCacheable` accepts it, so bytes the caller will
@@ -1359,15 +1380,38 @@ public final class AntigravityRunCoordinator: @unchecked Sendable {
         // caller's cancellation leaves it alive for the callers that remain.
         // A result nobody is left to consume must not become the cached good
         // fetch.
-        let outcome = await withTaskCancellationHandler {
-            await task.value
-        } onCancel: {
-            lock.lock()
-            // A caller whose run has already rotated out must not count
-            // itself against the generation that replaced it.
-            let lastOne = gen == generation && waiters <= 1
-            lock.unlock()
-            if isOwner || lastOne { task.cancel() }
+        let outcome: Outcome
+        if isOwner {
+            outcome = await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                lock.lock()
+                // A caller whose run has already rotated out must not count
+                // itself against the generation that replaced it.
+                let lastOne = gen == generation && waiters <= 1
+                lock.unlock()
+                task.cancel()
+            }
+        } else {
+            // `Task.value` ignores cancellation, so race the shared run
+            // against the caller's own cancellation: a cancelled joiner
+            // returns `.failed(CancellationError())` at once instead of
+            // hanging until the CLI run finishes.
+            let box = OutcomeBox()
+            outcome = await withTaskCancellationHandler {
+                await withCheckedContinuation { (cont: CheckedContinuation<Outcome, Never>) in
+                    box.arm(cont)
+                    Task { box.resume(with: await task.value) }
+                }
+            } onCancel: {
+                box.resume(with: .failed(CancellationError()))
+                lock.lock()
+                // A caller whose run has already rotated out must not count
+                // itself against the generation that replaced it.
+                let lastOne = gen == generation && waiters <= 1
+                lock.unlock()
+                if lastOne { task.cancel() }
+            }
         }
         await beforeBookkeeping?(isOwner)
         lock.lock()

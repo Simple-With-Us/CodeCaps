@@ -180,7 +180,15 @@ final class AntigravitySafetyTests: XCTestCase {
         let operation: @Sendable () async throws -> Data = {
             runs.withLock { $0 += 1 }
             started.open()
-            await release.wait()
+            // Cancellation-aware: if the shared task is cancelled (the defect
+            // this test guards), the wait ends and the operation throws
+            // instead of completing as if nothing happened.
+            try await withTaskCancellationHandler {
+                await release.wait()
+            } onCancel: {
+                release.open()
+            }
+            try Task.checkCancellation()
             return Data("ok".utf8)
         }
 
@@ -298,6 +306,37 @@ final class AntigravitySafetyTests: XCTestCase {
         XCTAssertEqual(data, Data("ok-B".utf8))
         _ = await joinerB.value
         XCTAssertEqual(runs.withLock { $0 }, 2, "the new run must complete exactly once")
+    }
+
+    func testJoinerCancellationReturnsPromptly() async {
+        let t0 = Date(timeIntervalSince1970: 5_000)
+        let coordinator = AntigravityRunCoordinator(minimumInterval: 0, date: { t0 })
+        let started = Gate()
+        let release = Gate()
+        let joined = Gate()
+        coordinator.onRegister = { joinedRun in if joinedRun { joined.open() } }
+        let operation: @Sendable () async throws -> Data = {
+            started.open()
+            await release.wait()
+            return Data("ok".utf8)
+        }
+
+        async let owner = coordinator.perform(now: t0, operation: operation)
+        await started.wait()
+        let joiner = Task { await coordinator.perform(now: t0, operation: operation) }
+        await joined.wait()
+        joiner.cancel()
+        // The joiner returns at once; awaiting the shared run here would hang
+        // until release opens, which this test never does before the check.
+        let joinerOutcome = await joiner.value
+        guard case .failed(let error) = joinerOutcome, error is CancellationError else {
+            return XCTFail("a cancelled joiner must return promptly with CancellationError, got \(joinerOutcome)")
+        }
+
+        release.open()
+        let ownerOutcome = await owner
+        guard case .fetched(let data, at: _) = ownerOutcome else { return XCTFail("expected fetched, got \(ownerOutcome)") }
+        XCTAssertEqual(data, Data("ok".utf8), "the shared run still completes for the remaining caller")
     }
 
     func testCoordinatorNeverCachesOutputTheCallerRejects() async {
