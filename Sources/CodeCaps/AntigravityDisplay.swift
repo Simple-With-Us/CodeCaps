@@ -80,7 +80,7 @@ struct DisplaySection: Identifiable, Equatable {
     /// The id of the window that set `remainingPercent`, captured at construction
     /// so the lookup stays stable when two snapshots in the same row tie on
     /// their percentage.  Without this hint, every refresh is a coin flip.
-    let drivingWindowId: String? = nil
+    var drivingWindowId: String? = nil
 
     var isPool: Bool { poolKey != nil }
     /// The pool's name on its own: "Gemini", "Third-Party".  A narrow row puts
