@@ -900,12 +900,53 @@ public enum WidgetPresentation {
             // Case-insensitive on purpose: a producer that ships `General`
             // or `Grok:Subscription` must hit the same alias as its lowercase
             // twin, or one allowance splits into two rows (kody, PR #369).
-            switch series.lowercased() {
-            case "general", "minimax:general", "minimax:general:weekly",
-                 "minimax:coding-plan", "coding-plan":
+            var candidate = series.lowercased()
+            // The codecaps local reader's bare ids carry a machine prefix
+            // (local-mac:minimax:general:interval) where the collector's
+            // copies carry the plain series ("general"), so a local copy
+            // keyed apart from its collector twin and both 5h rows survived
+            // the merge.  Strip the local-mac:<provider>: prefix and alias
+            // the remainder through the same table;  the remainder keeps
+            // the reader's cadence word (":interval", ":weekly"), which the
+            // cadence leg of the key already separates, and
+            // "minimax:general:weekly" is a table entry in its own right
+            // (kody, PR #524).
+            if candidate.hasPrefix("local-mac:") {
+                let rest = candidate.dropFirst("local-mac:".count)
+                if let providerEnd = rest.firstIndex(of: ":") {
+                    candidate = String(rest[rest.index(after: providerEnd)...])
+                }
+            }
+            switch candidate {
+            case "general", "general:interval", "general:weekly",
+                 "minimax:general", "minimax:general:weekly",
+                 "minimax:general:interval", "minimax:coding-plan", "coding-plan":
                 return "minimax:plan"
             default:
-                return series
+                break
+            }
+            // The local reader's other MiniMax series carry the same
+            // cadence suffix (local-mac:minimax:video:interval reduces to
+            // "video:interval") where the collector ships the bare series
+            // ("video"), so the local copy keyed apart from its collector
+            // twin and both video rows survived the merge.  Alias any
+            // remaining cadence-suffixed or provider-prefixed form to its
+            // base series;  the cadence leg of the key comes from the
+            // window token, not the series, so this cannot fold one
+            // model's distinct cadences together (kody, PR #524).
+            var base = candidate
+            if base.hasPrefix("minimax:") {
+                base = String(base.dropFirst("minimax:".count))
+            }
+            for suffix in [":interval", ":weekly"] where base.hasSuffix(suffix) {
+                base = String(base.dropLast(suffix.count))
+                break
+            }
+            switch base {
+            case "general", "minimax:general", "minimax:coding-plan", "coding-plan", "plan":
+                return "minimax:plan"
+            default:
+                return base.isEmpty ? series : base
             }
         }
         // xAI's single subscription credit pool under two producer

@@ -2911,16 +2911,45 @@ public final class CompanionQuotaModel: ObservableObject {
     /// as the general model's interval reading
     /// (scripts/lib/subscription-quota-parsers.mjs), so "general" and
     /// "coding-plan" name ONE allowance observed under two identities.
-    /// Every other series - including any other MiniMax model - keeps its
-    /// own identity.
+    /// The normalization mirrors the widget's exactly, so the phone and
+    /// the widget derive identical allowance keys for the same snapshot.
     static func normalizedAllowanceSeries(providerKey: String, series: String) -> String {
         if providerKey.lowercased().contains("minimax") {
-            switch series {
-            case "general", "minimax:general", "minimax:general:weekly",
-                 "minimax:coding-plan", "coding-plan":
+            // Mirrors WidgetPresentation.normalizedAllowanceSeries so the
+            // phone and the widget derive identical allowance keys for the
+            // same snapshot (CC-223 parity):  matching is case-insensitive,
+            // the local reader's local-mac:<provider>: prefix is stripped,
+            // the general family aliases to the one plan allowance, and
+            // any remaining cadence-suffixed or provider-prefixed series
+            // aliases to its base series (kody, PR #524).
+            var candidate = series.lowercased()
+            if candidate.hasPrefix("local-mac:") {
+                let rest = candidate.dropFirst("local-mac:".count)
+                if let providerEnd = rest.firstIndex(of: ":") {
+                    candidate = String(rest[rest.index(after: providerEnd)...])
+                }
+            }
+            switch candidate {
+            case "general", "general:interval", "general:weekly",
+                 "minimax:general", "minimax:general:weekly",
+                 "minimax:general:interval", "minimax:coding-plan", "coding-plan":
                 return "minimax:plan"
             default:
-                return series
+                break
+            }
+            var base = candidate
+            if base.hasPrefix("minimax:") {
+                base = String(base.dropFirst("minimax:".count))
+            }
+            for suffix in [":interval", ":weekly"] where base.hasSuffix(suffix) {
+                base = String(base.dropLast(suffix.count))
+                break
+            }
+            switch base {
+            case "general", "minimax:general", "minimax:coding-plan", "coding-plan", "plan":
+                return "minimax:plan"
+            default:
+                return base.isEmpty ? series : base
             }
         }
         // xAI's single subscription credit pool under two producer
@@ -2932,7 +2961,7 @@ public final class CompanionQuotaModel: ObservableObject {
         // capture (2026-11-06) shows both copies at the same reset second
         // and reading.  Bounded to the subscription pool;  every other xAI
         // series keeps its own identity.
-        if providerKey == "xai", series == "grok:subscription" {
+        if providerKey == "xai", series.lowercased() == "grok:subscription" {
             return "xai:subscription"
         }
         return series
