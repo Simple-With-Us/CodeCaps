@@ -261,7 +261,7 @@ struct GlancePopover: View {
     private func groupHeader(_ group: FleetGroup) -> some View {
         HStack(spacing: 8) {
             Text(glanceFleetGroupHeading(glanceFleetSourceLabel(group.title)))
-                .font(.system(size: 10, weight: .bold))
+                .font(.caption2.weight(.bold))
                 .tracking(0.8)
                 .foregroundStyle(Theme.groupBandLabel)
                 .lineLimit(1)
@@ -273,7 +273,7 @@ struct GlancePopover: View {
                 // it from the source name at a glance without dropping the
                 // semibold weight it needs to stay legible at 9pt on a band.
                 Text(reported)
-                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                    .font(.caption2.weight(.semibold).monospacedDigit())
                     .italic()
                     .tracking(0.6)
                     .foregroundStyle(Theme.groupBandLabel)
@@ -345,7 +345,7 @@ struct GlancePopover: View {
                         Image(systemName: "antenna.radiowaves.left.and.right.slash")
                             .font(.system(size: 13, weight: .bold))
                         Text("Sharing Stale")
-                            .font(.system(size: 14, weight: .heavy, design: .rounded))
+                            .font(.system(.subheadline, design: .rounded).weight(.heavy))
                     }
                     .foregroundStyle(Theme.warning)
                     .padding(.horizontal, 10)
@@ -374,7 +374,7 @@ struct GlancePopover: View {
             HStack(spacing: 5) {
                 Text("Open CodeCaps")
                 Text("⌘1")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.caption2.weight(.medium))
                     .foregroundStyle(colorScheme == .dark ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
             }
         }
