@@ -338,7 +338,7 @@ struct ConsoleView: View {
             }
             if let unavailable = state.unavailableAlert {
                 Text("Alert source unavailable: \(unavailable.providerKey)\(unavailable.windowId.map { " · \($0)" } ?? "").  Check Sources & Fleet for this provider.")
-                    .font(.system(size: 12))
+                    .font(.callout)
                     .foregroundStyle(Theme.warning)
                     .padding(.horizontal, Metrics.pagePadding)
                     .padding(.vertical, 8)
@@ -528,7 +528,7 @@ struct ConsoleSidebar: View {
                 Section {
                     sidebarRow(page: .allPlatforms) {
                         Label("All Platforms", systemImage: "square.grid.2x2")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                     }
                     sidebarRow(page: .runawayAlerts) {
                         HStack(spacing: 8) {
@@ -537,18 +537,18 @@ struct ConsoleSidebar: View {
                                 .foregroundStyle(model.activeRunawayAnomalies.isEmpty ? Theme.ink : Theme.warning)
                                 .frame(width: 18)
                             Text("Runaway Alerts")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.subheadline.weight(.medium))
                             Spacer(minLength: 4)
                             if !model.activeRunawayAnomalies.isEmpty {
                                 Text("\(model.activeRunawayAnomalies.count)")
-                                    .font(.system(size: 10, weight: .bold))
+                                    .font(.caption2.weight(.bold))
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
                                     .background(Theme.warning, in: Capsule())
                             } else if !model.runawayAlertHistory.isEmpty {
                                 Text("\(model.runawayAlertHistory.count)")
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(.caption.weight(.medium))
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -568,11 +568,11 @@ struct ConsoleSidebar: View {
                                     .foregroundStyle(model.museCodeBurnAlert == nil ? Theme.ink : Theme.warning)
                                     .frame(width: 18)
                                 Text(page.settingsTitle)
-                                    .font(.system(size: 13, weight: .medium))
+                                    .font(.subheadline.weight(.medium))
                                 Spacer(minLength: 4)
                                 if model.museCodeBurnAlert != nil {
                                     Text("1")
-                                        .font(.system(size: 10, weight: .bold))
+                                        .font(.caption2.weight(.bold))
                                         .foregroundStyle(.white)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
@@ -588,7 +588,7 @@ struct ConsoleSidebar: View {
                     ForEach(ConsolePage.settingsPages, id: \.self) { page in
                         sidebarRow(page: page) {
                             Label(page.settingsTitle, systemImage: page.symbol)
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.subheadline.weight(.medium))
                         }
                     }
                 } header: {
@@ -664,7 +664,7 @@ struct ConsoleSidebar: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 4) {
                     Text(row.platformTitle)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.subheadline.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if model.hasActiveRunawayAnomaly(for: row) {
@@ -677,7 +677,7 @@ struct ConsoleSidebar: View {
                 }
                 if let poolTitle = row.poolTitle {
                     Text(poolTitle)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
@@ -700,7 +700,7 @@ struct ConsoleSidebar: View {
                 // is long enough to want every point of the row.  "100%" is
                 // about 31pt at 11pt, so 30pt truncated it to "100…".
                 Text("\(Int(remaining.rounded()))%")
-                    .font(.system(size: 11).monospacedDigit())
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
@@ -723,7 +723,7 @@ struct ConsoleSidebar: View {
         if let handoffError = model.handoffError {
             Divider()
             Text(handoffError)
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(Theme.warning)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -769,7 +769,7 @@ struct AllPlatformsPage: View {
                 emptyState
             } else {
                 HStack {
-                    Text("This Mac").font(.system(size: 13, weight: .semibold))
+                    Text("This Mac").font(.subheadline.weight(.semibold))
                     Spacer()
                 }
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
@@ -782,7 +782,7 @@ struct AllPlatformsPage: View {
 
             Text("Each limit is separate." + sentenceGap
                  + "Antigravity lists its model groups on their own rows.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -826,8 +826,8 @@ struct AllPlatformsPage: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Theme.warning)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Could Not Load Other Devices").font(.system(size: 12, weight: .semibold))
-                Text(error).font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("Could Not Load Other Devices").font(.callout.weight(.semibold))
+                Text(error).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             Button("Open Dashboard") { state.page = .settingsSourcesFleet }
@@ -864,23 +864,23 @@ struct AllPlatformsPage: View {
             Rectangle().fill(Theme.fleet).frame(width: 2)
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Other Devices").font(.system(size: 13, weight: .semibold))
+                    Text("Other Devices").font(.subheadline.weight(.semibold))
                     Spacer()
                     Text(model.lastPullTime.map { "Updated \($0.formatted(date: .omitted, time: .shortened))" } ?? "Not loaded yet")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 if fleetGroups.isEmpty {
                     Text("No other machines have reported yet.")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(fleetGroups) { group in
                         HStack {
-                            Text(group.title).font(.system(size: 12, weight: .semibold))
+                            Text(group.title).font(.callout.weight(.semibold))
                             Spacer()
                             Text("\(group.windowCount) reading\(group.windowCount == 1 ? "" : "s")")
-                                .font(.system(size: 11))
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
@@ -962,7 +962,7 @@ struct PlatformDetailPage: View {
                                 ? { state.page = .settingsSourcesFleet } : nil)
             } else {
                 Text("Quota unavailable")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
             }
             displaySection
@@ -1112,7 +1112,7 @@ struct PlatformDetailPage: View {
                        caption: String? = nil, disabled: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Text(label)
-                .font(.system(size: 13, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .frame(width: 150, alignment: .leading)
             VStack(alignment: .leading, spacing: 3) {
                 TextField(placeholder, text: binding)
@@ -1120,7 +1120,7 @@ struct PlatformDetailPage: View {
                     .disabled(disabled)
                     .onSubmit(save)
                 if let caption {
-                    Text(caption).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(caption).font(.caption).foregroundStyle(.secondary)
                 }
             }
         }

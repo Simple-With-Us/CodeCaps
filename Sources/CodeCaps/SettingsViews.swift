@@ -33,7 +33,7 @@ struct SettingsMenuBarPage: View {
             } footer: {
                 Text("Both keeps the menu bar icon and a Dock icon." + sentenceGap
                      + "Dock hides the menu bar icon, so use the Dashboard to reach your quota.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -75,7 +75,7 @@ struct SettingsMenuBarPage: View {
                 }
 
                 Text(model.menuBarQuotaDescription(for: model.menuBarQuotaSelection))
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -87,7 +87,7 @@ struct SettingsMenuBarPage: View {
             } footer: {
                 Text("Match Provider follows each platform's Logo Style." + sentenceGap
                      + "Light/Dark and Colour override it for the menu bar only, leaving the Docked Bar and sidebar on whatever you set on Logo Style.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -106,7 +106,7 @@ struct SettingsMenuBarPage: View {
                         }
                         if model.menuBarStyle != .symbolOnly {
                             Text(model.menuBarTitle.isEmpty ? "—" : model.menuBarTitle)
-                                .font(.system(size: 13, weight: .medium).monospacedDigit())
+                                .font(.subheadline.weight(.medium).monospacedDigit())
                         }
                     }
                     .accessibilityElement(children: .combine)
@@ -115,7 +115,7 @@ struct SettingsMenuBarPage: View {
                     Text("Preview")
                 }
                 Text("This is what appears in your menu bar.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -156,7 +156,7 @@ struct SettingsMenuBarPage: View {
                         .accessibilityLabel("PiP background")
 
                         Text(model.pipBackground.detail)
-                            .font(.system(size: 11))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
 
                         // Owner 2026-10-28: the name is the first thing the
@@ -167,10 +167,10 @@ struct SettingsMenuBarPage: View {
                             .accessibilityLabel("Show Provider Names In PiP")
 
                         Text("Pinned Quotas (Default: Lowest 2 Remaining)")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         Text("Drag to reorder options." + sentenceGap + "Pinned quotas appear in the PiP widget in this order.")
-                            .font(.system(size: 11))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
 
                         PipOptionsReorderList(model: model)
@@ -181,7 +181,7 @@ struct SettingsMenuBarPage: View {
                 Eyebrow("Picture-in-Picture (PiP)")
             } footer: {
                 Text("A tiny on-screen HUD stays on top of all windows so you are aware of critical quotas in real time.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -280,7 +280,7 @@ struct SettingsPlatformsPage: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Drag to reorder." + sentenceGap
                  + "This order is used in the quota list and in the Docked Bar.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -296,7 +296,7 @@ struct SettingsPlatformsPage: View {
                             .accessibilityHidden(true)
                         PlatformLogo(providerKey: providerKey, size: 16,
                                      style: model.markStyle(for: providerKey))
-                        Text(label(for: providerKey)).font(.system(size: 13, weight: .medium))
+                        Text(label(for: providerKey)).font(.subheadline.weight(.medium))
                         Spacer()
                     }
                     .tag(providerKey)
@@ -431,14 +431,14 @@ struct SettingsSourcesFleetPage: View {
                     .foregroundStyle(Color.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Machine Identity: \(QuotaPublisher.machineName)")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.callout.weight(.semibold))
                     Text("Host: \(ProcessInfo.processInfo.hostName)")
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Text("Identified")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.caption2.weight(.medium))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color.secondary.opacity(0.14), in: Capsule())
@@ -488,7 +488,7 @@ struct SettingsSourcesFleetPage: View {
                     Text(handoffError).foregroundStyle(Theme.warning)
                 }
             }
-            .font(.system(size: 11))
+            .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -507,10 +507,10 @@ struct SettingsSourcesFleetPage: View {
                 PlatformLogo(providerKey: reader.providerKey, size: 16,
                              style: model.markStyle(for: reader.providerKey))
                 Text(section?.providerLabel ?? reader.label)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .frame(width: 110, alignment: .leading)
                 Text(reader.source)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 if let readerID = reader.optionalReaderID {
@@ -531,17 +531,17 @@ struct SettingsSourcesFleetPage: View {
             }
             if !optionalEnabled {
                 Text("Quota reads are off for this provider.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let issue {
                 Text(issue)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if !healthy && model.localEnabled {
                 Text("Not signed in locally.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if needsConsent { claudeConsentControls }
@@ -578,12 +578,12 @@ struct SettingsSourcesFleetPage: View {
                 }
             }
             Text("macOS will ask once." + sentenceGap + "Choose Always Allow.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let claudeConsentMessage {
                 Text(claudeConsentMessage)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(claudeConsentSucceeded ? Theme.success : Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -620,7 +620,7 @@ struct SettingsSourcesFleetPage: View {
                 Text("CodeCaps pulls each provider's quota from whichever sources can answer." + sentenceGap
                      + "Turn a source off to drop its windows everywhere — the menu bar, Docked Bar, and Console all skip it." + sentenceGap
                      + "Reorder to tell CodeCaps which source wins when two disagree; the top of the list is preferred, the bottom is the fallback.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -638,10 +638,10 @@ struct SettingsSourcesFleetPage: View {
                 PlatformLogo(providerKey: providerKey, size: 16,
                              style: model.markStyle(for: providerKey))
                 Text(label)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                 Spacer()
                 Text("\(sources.count) sources")
-                    .font(.system(size: 10))
+                    .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
             ForEach(Array(sources.enumerated()), id: \.element) { index, source in
@@ -668,14 +668,14 @@ struct SettingsSourcesFleetPage: View {
                 .accessibilityLabel(enabled ? "Hide windows from \(source)" : "Show windows from \(source)")
 
             Text(source)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(.callout, design: .monospaced))
                 .foregroundStyle(enabled ? Theme.ink : .secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Text("#\(index + 1)")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(.caption2, design: .monospaced).weight(.medium))
                 .foregroundStyle(.tertiary)
                 .frame(width: 24, alignment: .trailing)
 
@@ -710,7 +710,7 @@ private struct ReauthorizeCaption: View {
     var body: some View {
         Text("This build cannot read the saved token yet." + sentenceGap
              + "Re-authorize it, or paste the token again.")
-            .font(.system(size: 11))
+            .font(.caption)
             .foregroundStyle(Theme.warning)
             .textCase(nil)
             .fixedSize(horizontal: false, vertical: true)
@@ -741,7 +741,7 @@ private struct ReauthorizeCaption: View {
             .disabled(!pushEnabled)
 
             if pushDirty {
-                Text("Unsaved changes").font(.system(size: 11)).foregroundStyle(Theme.warning)
+                Text("Unsaved changes").font(.caption).foregroundStyle(Theme.warning)
             }
             HStack(spacing: 10) {
                 if model.syncTokenState.needsReauthorization {
@@ -792,7 +792,7 @@ private struct ReauthorizeCaption: View {
             }
             if let pushMessage {
                 Text(pushMessage)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(pushSucceeded ? Theme.success : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -802,7 +802,7 @@ private struct ReauthorizeCaption: View {
                     Eyebrow("SHARE THIS MAC")
                     Spacer()
                     Text(model.lastSyncTime.map { "Pushed \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pushed")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .textCase(nil)
                 }
@@ -813,7 +813,7 @@ private struct ReauthorizeCaption: View {
                 }
                 if let pushError = model.lastSyncError {
                     Text("Last push failed." + sentenceGap + pushError)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(Theme.danger)
                         .textCase(nil)
                         .fixedSize(horizontal: false, vertical: true)
@@ -821,7 +821,7 @@ private struct ReauthorizeCaption: View {
             }
         } footer: {
             Text("The Push Token is stored in your Keychain, never in a preference file.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -870,7 +870,7 @@ private struct ReauthorizeCaption: View {
                 .onSubmit(savePull)
 
             if pullDirty {
-                Text("Unsaved changes").font(.system(size: 11)).foregroundStyle(Theme.warning)
+                Text("Unsaved changes").font(.caption).foregroundStyle(Theme.warning)
             }
             HStack(spacing: 10) {
                 if model.readTokenState.needsReauthorization {
@@ -921,7 +921,7 @@ private struct ReauthorizeCaption: View {
             }
             if let pullMessage {
                 Text(pullMessage)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(pullSucceeded ? Theme.success : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -937,13 +937,13 @@ private struct ReauthorizeCaption: View {
                         Label("Open Web Dashboard", systemImage: "arrow.up.right.square")
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .textCase(nil)
                     .help("Open Web Dashboard")
                     .accessibilityLabel("Open Web Dashboard")
                 }
                 Text(model.lastPullTime.map { "Pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pulled")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .textCase(nil)
             }
@@ -952,7 +952,7 @@ private struct ReauthorizeCaption: View {
                 }
                 if let pullError = model.serverError {
                     Text("Last pull failed." + sentenceGap + pullError)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(Theme.danger)
                         .textCase(nil)
                         .fixedSize(horizontal: false, vertical: true)
@@ -960,7 +960,7 @@ private struct ReauthorizeCaption: View {
             }
         } footer: {
             Text("Refreshes every 5 minutes while CodeCaps is running.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
@@ -1019,7 +1019,7 @@ private struct AccentPicker: View {
     var body: some View {
         HStack(spacing: 8) {
             Text("Accent")
-                .font(.system(size: 12))
+                .font(.callout)
             ForEach(AccentChoice.allCases) { choice in
                 // A real Button: a tap gesture on a shape is invisible to
                 // keyboard focus and VoiceOver control search (Slice 4).
@@ -1093,7 +1093,7 @@ struct SettingsAppearancePage: View {
                     .accessibilityLabel("Dynamic Pacing Highlights")
             } footer: {
                 Text(footerCopy)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -1156,7 +1156,7 @@ struct SettingsLogoStylePage: View {
                          + "An optional dark appearance variant can also be supplied.")
                     Text("Custom files are stored in ~/Library/Application Support/CodeCaps/CustomMarks/.")
                 }
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -1172,7 +1172,7 @@ struct SettingsLogoStylePage: View {
             HStack(spacing: 10) {
                 PlatformLogo(providerKey: providerKey, size: 18, style: style)
                 Text(label(for: providerKey))
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                 Spacer()
                 Picker("", selection: Binding(
                     get: { model.markStyle(for: providerKey) },
@@ -1194,7 +1194,7 @@ struct SettingsLogoStylePage: View {
             if style != .custom, PlatformLogoImage.isMonochromeMark(providerKey) {
                 Text("Single-colour mark." + sentenceGap
                      + "Standard and Light/Dark look the same here, because this artwork has no brand colour to preserve.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1211,7 +1211,7 @@ struct SettingsLogoStylePage: View {
 
                     HStack(spacing: 8) {
                         Text(customDarkURL == nil ? "Image:" : "Light Appearance:")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                             .frame(width: 105, alignment: .leading)
                         Button(customURL == nil ? "Choose File…" : "Replace…") {
@@ -1220,7 +1220,7 @@ struct SettingsLogoStylePage: View {
                         .buttonStyle(.bordered)
                         if let customURL {
                             Text(customURL.lastPathComponent)
-                                .font(.system(size: 11))
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -1228,18 +1228,18 @@ struct SettingsLogoStylePage: View {
                                 NSWorkspace.shared.activateFileViewerSelecting([customURL])
                             }
                             .buttonStyle(.borderless)
-                            .font(.system(size: 11))
+                            .font(.caption)
                             Button("Remove", role: .destructive) {
                                 model.clearCustomMark(for: providerKey, isDarkMode: false)
                             }
                             .buttonStyle(.borderless)
-                            .font(.system(size: 11))
+                            .font(.caption)
                         }
                     }
 
                     HStack(spacing: 8) {
                         Text("Dark Appearance:")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                             .frame(width: 105, alignment: .leading)
                         Button(customDarkURL == nil ? "Choose File (Optional)…" : "Replace Dark…") {
@@ -1248,7 +1248,7 @@ struct SettingsLogoStylePage: View {
                         .buttonStyle(.bordered)
                         if let customDarkURL {
                             Text(customDarkURL.lastPathComponent)
-                                .font(.system(size: 11))
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -1256,12 +1256,12 @@ struct SettingsLogoStylePage: View {
                                 NSWorkspace.shared.activateFileViewerSelecting([customDarkURL])
                             }
                             .buttonStyle(.borderless)
-                            .font(.system(size: 11))
+                            .font(.caption)
                             Button("Remove", role: .destructive) {
                                 model.clearCustomMark(for: providerKey, isDarkMode: true)
                             }
                             .buttonStyle(.borderless)
-                            .font(.system(size: 11))
+                            .font(.caption)
                         }
                     }
                 }
@@ -1364,7 +1364,7 @@ struct SettingsAboutPage: View {
                     AboutBrandMark(size: 34)
                     Text("CodeCaps").font(.system(size: 16, weight: .semibold))
                     Text(CodeCapsVersion.display)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
@@ -1389,7 +1389,7 @@ struct SettingsAboutPage: View {
                         + "If CodeCaps is in front when an update is ready, it waits until you switch away."
                      : "Development builds do not update themselves." + sentenceGap
                         + "Install a release from the project page to get automatic updates.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1405,7 +1405,7 @@ struct SettingsAboutPage: View {
             } footer: {
                 Text("CodeCaps reads the AI plans already signed in on this Mac." + sentenceGap
                      + "It does not save a provider API key.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1488,18 +1488,18 @@ struct SettingsNotificationsPage: View {
                         Text("")
                             .gridColumnAlignment(.leading)
                         Text("On")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 34)
                         Text("Options")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 300, alignment: .leading)
                     }
 
                     GridRow {
                         Text("Running Out")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.caption.weight(.medium))
                             .help("Warn when a quota window is projected to run out before its next reset, so you can wind work up or leave handover notes.")
                             .frame(width: 130, alignment: .leading)
                         Toggle("", isOn: $model.exhaustionAlertsEnabled)
@@ -1520,7 +1520,7 @@ struct SettingsNotificationsPage: View {
                                     .accessibilityLabel("Exhaustion warning push notification")
                             }
                             Text(exhaustionDeliveryDetail)
-                                .font(.system(size: 10))
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
                         .frame(width: 300, alignment: .leading)
@@ -1532,7 +1532,7 @@ struct SettingsNotificationsPage: View {
             } footer: {
                 Text("Every alert is independent: turn on the ones you want and leave the rest off." + sentenceGap
                      + "Running Out measures how fast a window is being spent right now and warns before it empties; Runaway Usage compares your current hour against your own recent pattern; Reset Alerts fire when a window resets.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1546,7 +1546,7 @@ struct SettingsNotificationsPage: View {
             } footer: {
                 Text("An explicit Keep Mine choice on a platform's page stays silent regardless of this switch." + sentenceGap
                      + "A new plan name on either side always warns again.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1567,7 +1567,7 @@ struct SettingsNotificationsPage: View {
 
                 if model.alarmSound != .silent {
                     Label("\(model.alarmSound.pickerDetail)", systemImage: "speaker.wave.2")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.top, 1)
                     Button("Preview Sound") {
@@ -1582,7 +1582,7 @@ struct SettingsNotificationsPage: View {
                 Text("A provider's longest window, such as its weekly or monthly limit, alerts every time it resets, so you know a new week or month began." + sentenceGap
                      + "A shorter window, such as a 5-hour limit, alerts only if it reached its cap or came within 20% of it before resetting." + sentenceGap
                      + "Turn All off to choose providers one by one with the bell at the left of each row in the Docked Bar.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1599,7 +1599,7 @@ struct SettingsNotificationsPage: View {
                                       in: BurnRateMonitor.baselineRange,
                                       step: 0.5)
                             Text(String(format: "%.1f×", model.anomalyBaselineMultiplier))
-                                .font(.system(size: 11).monospacedDigit())
+                                .font(.caption.monospacedDigit())
                                 .foregroundStyle(Theme.ink)
                                 .frame(width: 38, alignment: .trailing)
                         }
@@ -1612,7 +1612,7 @@ struct SettingsNotificationsPage: View {
                                       in: BurnRateMonitor.peakRange,
                                       step: 0.1)
                             Text(String(format: "%.1f×", model.anomalyPeakMultiplier))
-                                .font(.system(size: 11).monospacedDigit())
+                                .font(.caption.monospacedDigit())
                                 .foregroundStyle(Theme.ink)
                                 .frame(width: 38, alignment: .trailing)
                         }
@@ -1622,14 +1622,14 @@ struct SettingsNotificationsPage: View {
                         let history = BurnRateMonitor.historySummary()
                         Text("\(history.sampleCount) saved local readings in the past 7 days." + sentenceGap
                              + "Each quota window needs at least one hour of valid measured intervals before its comparison can alert.")
-                            .font(.system(size: 11))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
 
                         if !model.runawayAlertHistory.isEmpty {
                             Divider().padding(.vertical, 4)
                             Text("Recent Runaway Alerts")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.caption.weight(.semibold))
                                 .foregroundStyle(.primary)
                             ForEach(model.runawayAlertHistory.prefix(5)) { alert in
                                 Button {
@@ -1642,14 +1642,14 @@ struct SettingsNotificationsPage: View {
                                     HStack(alignment: .top) {
                                         VStack(alignment: .leading, spacing: 1) {
                                             Text("\(alert.providerLabel) · \(alert.windowLabel)")
-                                                .font(.system(size: 11, weight: .medium))
+                                                .font(.caption.weight(.medium))
                                             Text(alert.summary)
-                                                .font(.system(size: 10))
+                                                .font(.caption2)
                                                 .foregroundStyle(.secondary)
                                         }
                                         Spacer()
                                         Text(alert.timestamp.formatted(date: .omitted, time: .shortened))
-                                            .font(.system(size: 10).monospacedDigit())
+                                            .font(.caption2.monospacedDigit())
                                             .foregroundStyle(.secondary)
                                     }
                                 }
@@ -1661,7 +1661,7 @@ struct SettingsNotificationsPage: View {
                             Button("View All in Runaway Alerts Console…") {
                                 state.page = .runawayAlerts
                             }
-                            .font(.system(size: 11))
+                            .font(.caption)
                             .controlSize(.small)
                             .padding(.top, 4)
                         }
@@ -1674,7 +1674,7 @@ struct SettingsNotificationsPage: View {
                 Text("5× the measured average is the recommended starting point." + sentenceGap
                      + "The comparison uses only valid readings from the same quota period and account." + sentenceGap
                      + "The measured-peak check catches unusually fast depletion relative to your own past activity.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1704,14 +1704,14 @@ struct SettingsNotificationsPage: View {
                     } icon: {
                         Image(systemName: outcome.isFailure ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     }
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(outcome.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
                     .padding(.top, 2)
                 }
             } footer: {
                 Text("Triggers a test notification and alert sound to confirm macOS Notification permissions." + sentenceGap
                      + "The result is reported here, so a refused send tells you why instead of doing nothing.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1730,15 +1730,15 @@ struct SettingsNotificationsPage: View {
         if model.burnRateAlertsEnabled {
             HStack(spacing: 8) {
                 Text(String(format: "%.0f×", model.anomalyBaselineMultiplier))
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.caption2.monospacedDigit())
                 Text("vs avg")
-                    .font(.system(size: 10))
+                    .font(.caption2)
                 Text(String(format: "%.0f×", model.anomalyPeakMultiplier))
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.caption2.monospacedDigit())
                 Text("vs peak")
-                    .font(.system(size: 10))
+                    .font(.caption2)
                 Button("Details…") { state.page = .runawayAlerts }
-                    .font(.system(size: 10))
+                    .font(.caption2)
                     .controlSize(.small)
                     .accessibilityLabel("Open Runaway Usage alert details")
             }
@@ -1746,7 +1746,7 @@ struct SettingsNotificationsPage: View {
             .frame(width: 300, alignment: .leading)
         } else {
             Text("Off")
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .frame(width: 300, alignment: .leading)
         }
@@ -1900,7 +1900,7 @@ struct SettingsInfisicalPage: View {
             footer: {
                 Text("Use the complete service token, including its st. prefix." + sentenceGap
                      + "Credentials stay in the Keychain on this Mac; Infisical enforces their actual permissions.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1929,7 +1929,7 @@ struct SettingsInfisicalPage: View {
             footer: {
                 Text(settings.canWrite ? "Changes are saved to Infisical before the local cache updates."
                      : "Choose a matching write binding to save changes to Infisical.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
