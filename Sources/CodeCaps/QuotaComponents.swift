@@ -1266,7 +1266,7 @@ struct QuotaRow: View {
            let lim = snapshot.window.absoluteLimit {
             return "\(Int(rem.rounded()))/\(Int(lim.rounded()))"
         }
-        return snapshot.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
+        return snapshot.remainingPercent.map { "\(Int($0.rounded()))% remaining" } ?? "—"
     }
     private var barMetrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
     private var barDimmed: Bool { quotaBarIsDimmed(for: snapshot, sourceFailed: sourceFailed) }

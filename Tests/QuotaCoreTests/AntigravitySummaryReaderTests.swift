@@ -155,4 +155,64 @@ final class AntigravitySummaryReaderTests: XCTestCase {
     // Quota fields captured from agy 1.5.7; account and rendered prose omitted.
     private static let cliSummary = #"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.27342507243156433,"reset_time":"2026-11-15T05:48:08Z"},{"id":"gemini-5h","window":"5h","remaining_fraction":0.48741298913955688,"reset_time":"2026-11-13T06:25:21Z"}]},{"name":"Claude and GPT models","buckets":[{"id":"3p-weekly","window":"weekly","remaining_fraction":1,"reset_time":"2026-11-20T02:43:45Z"},{"id":"3p-5h","window":"5h","remaining_fraction":1,"reset_time":"2026-11-13T07:43:45Z"}]}]}}}"#
 
+    /// Audit fix #5: a 4xx on the first attempt is the server answering.  The
+    /// fan-out stops at once and returns nil so the outer loop can move on to
+    /// the next candidate instead of hammering ports past the deadline.
+    func testAttemptCandidateShortCircuitsOnFirst4xx() async {
+        let attempts = AttemptCounter()
+        let fetch: @Sendable (URLRequest) async throws -> Data = { _ in
+            attempts.increment()
+            throw AntigravitySummaryReader.FetchFailure.clientError(404)
+        }
+        let data = await AntigravitySummaryReader.attemptCandidate(
+            csrf: "",
+            ports: [12345, 23456],
+            deadline: ProcessInfo.processInfo.systemUptime + 10,
+            fetch: fetch)
+        XCTAssertNil(data)
+        XCTAssertEqual(attempts.count, 1, "4xx must stop the per-candidate fan-out after one attempt")
+    }
+
+    /// Audit fix #5: at most two attempts per candidate.  Transport errors
+    /// use up the budget, then the loop yields and the outer caller tries a
+    /// fresh candidate.
+    func testAttemptCandidateStopsAtTwoAttemptsEvenWithRepeatedTransportErrors() async {
+        let attempts = AttemptCounter()
+        let fetch: @Sendable (URLRequest) async throws -> Data = { _ in
+            attempts.increment()
+            throw AntigravitySummaryReader.FetchFailure.transport
+        }
+        _ = await AntigravitySummaryReader.attemptCandidate(
+            csrf: "",
+            ports: [12345, 23456],
+            deadline: ProcessInfo.processInfo.systemUptime + 10,
+            fetch: fetch)
+        XCTAssertEqual(attempts.count, 2, "transport failures must still respect the two-attempt cap")
+    }
+
+    /// Audit fix #5: a 2xx with no groups is the server saying "I have nothing
+    /// for you" - same effect as a 4xx for fan-out purposes.
+    func testAttemptCandidateStopsOnTwoHundredWithNoGroups() async {
+        let attempts = AttemptCounter()
+        let fetch: @Sendable (URLRequest) async throws -> Data = { _ in
+            attempts.increment()
+            return Data(#"{"response":{"groups":[]}}"#.utf8)
+        }
+        let data = await AntigravitySummaryReader.attemptCandidate(
+            csrf: "",
+            ports: [12345],
+            deadline: ProcessInfo.processInfo.systemUptime + 10,
+            fetch: fetch)
+        XCTAssertNil(data)
+        XCTAssertEqual(attempts.count, 1, "an empty 200 is the same answer as a 4xx: stop")
+    }
+
+    /// Count fetch calls without a mutable actor closure; the production
+    /// fan-out is `@Sendable` and runs across actors.
+    private final class AttemptCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func increment() { lock.lock(); value += 1; lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+    }
 }
