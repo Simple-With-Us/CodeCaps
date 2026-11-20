@@ -652,20 +652,20 @@ struct RunawayAnomalyGlanceCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text("↑USAGE:")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.caption.weight(.bold))
                         .foregroundStyle(Theme.warning)
                     Text(normalizedTitle)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                         .lineLimit(1)
                 }
                 HStack(spacing: 6) {
                     let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
                     Text("\(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
                     if let rate = anomaly.ratePercentPerHour {
                         Text("\(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(.system(.caption, design: .rounded).weight(.bold))
                             .foregroundStyle(Theme.warning)
                     }
                 }
@@ -715,20 +715,20 @@ struct PlanChangeGlanceCard: View {
     var body: some View {
         HStack(spacing: 8) {
             Text("Δ")
-                .font(.system(size: 13, weight: .bold))
+                .font(.subheadline.weight(.bold))
                 .foregroundStyle(accentColor)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text("Plan Change:")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.caption.weight(.bold))
                         .foregroundStyle(accentColor)
                     Text(windowLabel.map { "\(providerLabel) (\($0))" } ?? providerLabel)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                         .lineLimit(1)
                 }
                 Text(detailText)
-                    .font(.system(size: 10))
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -775,18 +775,18 @@ struct RunawayRecentAlertGlanceCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text("Recent Alert:")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.caption.weight(.bold))
                         .foregroundStyle(Theme.warning)
                     Text(normalizedTitle)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                         .lineLimit(1)
                 }
                 HStack(spacing: 6) {
                     Text("\(alert.multiplier.formatted(.number.precision(.fractionLength(1))))× ↑USAGE")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(.system(.caption, design: .rounded).weight(.bold))
                         .foregroundStyle(Theme.warning)
                     Text("· \(alert.timestamp.formatted(date: .omitted, time: .shortened))")
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -994,7 +994,7 @@ struct GlanceHeaderBar: View {
 
             if let count, !count.isEmpty {
                 Text(count)
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .font(.caption.weight(.medium).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .fixedSize()
@@ -1011,7 +1011,7 @@ struct GlanceHeaderBar: View {
 
             if let time, !time.isEmpty {
                 Text(time)
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .font(.caption.weight(.medium).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .fixedSize()
@@ -1149,7 +1149,7 @@ struct GlanceViewToggle: View {
                 Text(Self.widest).hidden()
                 Text(mode.title)
             }
-            .font(.system(size: 11, weight: .semibold))
+            .font(.caption.weight(.semibold))
             .lineLimit(1)
             .fixedSize()
             .foregroundStyle(selected ? Theme.onAccent : Theme.ink.opacity(0.7))
@@ -1193,7 +1193,7 @@ struct GlanceAlarmAllToggle: View {
             Image(systemName: isOn ? "bell.fill" : "bell")
                 .font(.system(size: 13, weight: .semibold))
             Text("All")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.subheadline.weight(.semibold))
         }
         // Owner 2026-10-10: "the All next to alarm should be black or normal
         // dark text not accent color".  Ink follows the appearance and the
@@ -1229,9 +1229,9 @@ struct GlanceEmptyState: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.subheadline.weight(.semibold))
             Text(message)
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1659,7 +1659,7 @@ struct GlanceAtCap: View {
                 .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
             if !exactTime.isEmpty {
                 Text(exactTime)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.caption2.weight(.medium))
                     .foregroundStyle(Theme.ink.opacity(0.55))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -1742,7 +1742,7 @@ struct GlanceMeter: View {
     var body: some View {
         HStack(spacing: Metrics.glanceMeterGap) {
             Text(glanceMeterCaption(snapshot))
-                .font(.system(size: 11, weight: .medium))
+                .font(.caption.weight(.medium))
                 // Ink, not `.primary` and not the status colour.  AG's #112
                 // set this to `.primary`, which is very close; the owner asked
                 // for the caption and the percentage to be black (white in
@@ -1761,7 +1761,7 @@ struct GlanceMeter: View {
                 .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
                 .help(staleBarHelp)
             Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .font(.caption.weight(.medium).monospacedDigit())
                 .foregroundStyle(Theme.ink)
                 .padding(.horizontal, 3)
                 .padding(.vertical, 1)
@@ -1873,9 +1873,9 @@ struct GlanceMeterColumns: View {
             HStack(spacing: Metrics.glanceMeterGroupGap) {
                 VStack(spacing: 1) {
                     Text("Using extra balance")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                     Text(glanceAtCapSummary(atCap, now: now))
-                        .font(.system(size: 9))
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 .multilineTextAlignment(.center)
@@ -1907,7 +1907,7 @@ struct GlanceMeterColumns: View {
                 .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
         } else if let gap, !gap.isEmpty {
             Text(gap)
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundStyle(Theme.ink.opacity(0.62))
                 .multilineTextAlignment(.leading)
                 .lineLimit(3)
@@ -2237,7 +2237,7 @@ struct GlanceRow: View {
                 // line rather than being truncated away.
                 HStack(spacing: 3) {
                     Text(row.poolTitle == nil ? row.title : row.platformTitle)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.subheadline.weight(.medium))
                         // Italic and dimmed while the row is at risk or already
                         // capped, so the eye reads the cap line first.
                         .italic(platformNameDimmed)
@@ -2253,7 +2253,7 @@ struct GlanceRow: View {
                 }
                 if let subtitle = row.poolTitle ?? section.displaySubtitle(customInfo: customInfo) {
                     Text(subtitle)
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .italic(platformNameDimmed)
                         .foregroundStyle(platformNameDimmed ? Theme.ink.opacity(0.40) : .secondary)
                         .lineLimit(1)
@@ -2305,7 +2305,7 @@ struct GlanceRow: View {
                 // left-aligned, so a row without a reading still lines up
                 // with the bars in the rows above and below it.
                 Text(statusText)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .fixedSize()
@@ -2381,7 +2381,7 @@ struct GlanceRow: View {
                     }
                     Spacer().frame(width: Metrics.glanceLogoWidth + Metrics.glanceLogoGap)
                     Text(lineTitle(line))
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -2490,7 +2490,7 @@ struct ConsentRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(message)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.callout.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Open Dashboard", action: action)
                     .controlSize(.small)
@@ -2521,9 +2521,9 @@ struct FleetSetupRow: View {
                     .foregroundStyle(Theme.fleet)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Share With Other Devices")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.subheadline.weight(.medium))
                     Text("Share this Mac's readings, or show your other devices here.")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2639,7 +2639,7 @@ struct GlanceFooterProminentButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .medium))
+            .font(.callout.weight(.medium))
             // The ink follows the *accent*, not the appearance.
             //
             // This read `colorScheme`, which is only correct while every accent
