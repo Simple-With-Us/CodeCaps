@@ -30,6 +30,52 @@ final class WidgetParseContractTests: XCTestCase {
         return value
     }
 
+    func testReportedReadingDateSurvivesGenericWidgetMapping() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let iso = ISO8601DateFormatter()
+        let stamp = iso.string(from: now.addingTimeInterval(-60))
+        let reset = iso.string(from: now.addingTimeInterval(3600))
+        for dateMode in ["reported-only", "reported-preferred", "occurred-fallback", "undated"] {
+            var value = wire("local-mac:cursor:weekly", "cursor", "weekly", 50,
+                             stamp: stamp, reset: reset)
+            switch dateMode {
+            case "reported-only": value.removeValue(forKey: "occurredAt")
+            case "reported-preferred": value["occurredAt"] = iso.string(from: now.addingTimeInterval(-7200))
+            case "occurred-fallback": value["reportedAt"] = "not-a-date"
+            default:
+                value.removeValue(forKey: "reportedAt")
+                value.removeValue(forKey: "occurredAt")
+            }
+            let parsed = WidgetPresentation.parseSnapshot(
+                data: try JSONSerialization.data(withJSONObject: ["windows": [value]]), now: now)
+            let window = try XCTUnwrap(parsed.first { $0.id == "cursor" }?.windows.first)
+            if dateMode == "undated" {
+                XCTAssertNil(window.observedAt)
+            } else {
+                XCTAssertEqual(window.observedAt, now.addingTimeInterval(-60), dateMode)
+            }
+            let caption = WidgetPresentation.smallWidgetCaption(window: window, now: now)
+            XCTAssertEqual(caption.contains("age unknown"), dateMode == "undated", dateMode)
+        }
+    }
+
+    func testReportedOnlyAntigravityDetailKeepsItsReadingDate() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let iso = ISO8601DateFormatter()
+        let stamp = iso.string(from: now.addingTimeInterval(-60))
+        let reset = iso.string(from: now.addingTimeInterval(3600))
+        let pool = wire("antigravity:gemini:5h", "google-antigravity", "5h", 63,
+                        "Gemini Models 5-hour", stamp: stamp, reset: reset)
+        var detail = wire("gemini:argon", "google-antigravity", "5h", 50,
+                          "Gemini Argon", model: "Argon", stamp: stamp, reset: reset)
+        detail.removeValue(forKey: "occurredAt")
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": [pool, detail]]), now: now)
+        let window = try XCTUnwrap(parsed.first { $0.id == "antigravity-gemini" }?.detailWindows.first)
+        XCTAssertEqual(window.observedAt, now.addingTimeInterval(-60))
+        XCTAssertFalse(WidgetPresentation.smallWidgetCaption(window: window, now: now).contains("age unknown"))
+    }
+
     /// The antigravity pool through the real parse path:  one Argon detail
     /// (never a duplicate), the exported pool rows winning the meters, and a
     /// spent detail never dragging the pool headline to zero.

@@ -682,6 +682,17 @@ public enum WidgetPresentation {
                                            isAtCap: window.isExhausted) {
             return countdown.isEmpty ? cue : "\(cadence) · \(cue)"
         }
+        // Only an undated window falls through here: a dated one that cue
+        // passed is fresh or its period ended, and both keep silence.  An
+        // undated bar must not read as current - silence is what a fresh bar
+        // looks like - but the reset stays dated, so the countdown stays in
+        // the caption (Kody review, PR #528).  A window with no number at
+        // all stays silent.
+        if window.observedAt == nil,
+           let cue = QuotaStalenessRule.undatedCue(hasReading: window.remainingPercent != nil
+               || window.absoluteRemaining != nil) {
+            return countdown.isEmpty ? cue : "\(cadence) · \(countdown) · \(cue)"
+        }
         guard !countdown.isEmpty else { return cadence }
         return "\(cadence) · \(countdown)"
     }
@@ -1191,7 +1202,7 @@ public enum WidgetPresentation {
             guard trimmedLabel != "plan details",
                   !(trimmedLabel == "plan" && w.remainingPercent == nil) else { continue }
             let parsedReset = parseDate(from: w.resetAt)
-            let observed = parseDate(from: w.occurredAt)
+            let observed = parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt)
             let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let pct = w.remainingPercent
             // The one shared rule decides, as it does on the phone and on the
@@ -1464,7 +1475,7 @@ public enum WidgetPresentation {
                 resetAt: parseDate(from: w.resetAt),
                 isExhausted: QuotaCapRule.isExhausted(remainingPercent: w.remainingPercent,
                                                       providerSaysExhausted: w.isExhausted ?? false),
-                observedAt: parseDate(from: w.occurredAt),
+                observedAt: parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt),
                 isModelDetail: true
             ))
         }

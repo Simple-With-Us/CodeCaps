@@ -46,6 +46,10 @@ public struct CompanionContentView: View {
                         errorBanner(error)
                     }
 
+                    if let stale = stalenessBannerMessage {
+                        errorBanner(stale)
+                    }
+
                     if model.items.isEmpty {
                         emptyState
                     } else {
@@ -207,6 +211,27 @@ public struct CompanionContentView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.orange.opacity(0.28), lineWidth: 0.5)
         )
+    }
+
+    /// The stale-feed banner, or nil when the readings are current.
+    ///
+    /// The header stamp already says the data's age (CC-214); what the page
+    /// lacked was a cue you cannot scroll past.  The phone showed an
+    /// eighteen-hour-old feed with every bar looking current (owner,
+    /// Nov-15-2026): the pull kept serving old windows and nothing on the
+    /// page said so.  Two honest states: the feed dated nothing (unverified),
+    /// or the newest stamp passed the shared freshness threshold (stale,
+    /// with the stamp).
+    private var stalenessBannerMessage: String? {
+        guard !model.items.isEmpty, model.hasDataSource else { return nil }
+        guard let updated = model.lastUpdated else {
+            return "These readings arrived without a timestamp." + sentenceGap
+                + "Their age cannot be verified."
+        }
+        guard Date().timeIntervalSince(updated) >= QuotaFreshnessRule.staleAfter else { return nil }
+        return "Readings are stale." + sentenceGap
+            + "Last update \(UpdatedStamp.label(updated))." + sentenceGap
+            + "Check that CodeCaps on the Mac is running and sharing."
     }
 
     // MARK: - Empty State

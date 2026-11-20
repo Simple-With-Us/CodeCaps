@@ -38,6 +38,7 @@ public struct LocalQuotaReader: Sendable {
     private let readClaudeCredential: @Sendable () async -> ClaudeCredentialAccess
     private let renewClaudeLogin: @Sendable () async -> Void
     private let renewalThrottle: ClaudeRenewalThrottle
+    private let antigravityCoordinator: AntigravityRunCoordinator
     private let claudeKeychainTimeout: TimeInterval
     private let claudeProfileTimeout: TimeInterval
 
@@ -59,6 +60,7 @@ public struct LocalQuotaReader: Sendable {
         readClaudeCredential: (@Sendable () async -> ClaudeCredentialAccess)? = nil,
         renewClaudeLogin: (@Sendable () async -> Void)? = nil,
         renewalThrottle: ClaudeRenewalThrottle = .shared,
+        antigravityCoordinator: AntigravityRunCoordinator? = nil,
         claudeKeychainTimeout: TimeInterval = ClaudeCredentialSource.boundedAccessTimeout,
         claudeProfileTimeout: TimeInterval = 1
     ) {
@@ -75,14 +77,22 @@ public struct LocalQuotaReader: Sendable {
             self.renewClaudeLogin = Self.makeClaudeRenewer(homeDirectory: self.homeDirectory)
         } else { self.renewClaudeLogin = {} }
         self.renewalThrottle = renewalThrottle
+        // An injected runner belongs to an offline test, which must never see
+        // process-wide state; production shares one coordinator so concurrent
+        // refreshes cannot overlap two CLI invocations.
+        self.antigravityCoordinator = antigravityCoordinator
+            ?? (runAntigravity == nil ? .shared : AntigravityRunCoordinator(minimumInterval: 0))
         self.claudeKeychainTimeout = claudeKeychainTimeout
         self.claudeProfileTimeout = claudeProfileTimeout.isFinite ? min(1, max(0.001, claudeProfileTimeout)) : 1
     }
 
     /// Reads all configured local sources concurrently.  This method never
     /// refreshes OAuth credentials itself and never posts telemetry.  The one
-    /// exception is asking Claude Code to renew its own expired login, which
-    /// Claude Code performs and writes on its own.
+    /// exception is asking Claude Code to recover its own unavailable login, which
+    /// Claude Code performs and writes on its own.  The Antigravity handoff runs
+    /// only the npm `antigravity-usage` reader backed by its own saved login - a
+    /// silent HTTPS token refresh - and never a sign-in-capable CLI; without that
+    /// login the provider reports a consent need instead of spawning anything.
     public func read() async -> LocalQuotaResult {
         await withTaskGroup(of: ProviderRead.self, returning: LocalQuotaResult.self) { group in
             for provider in Provider.allCases {
@@ -130,24 +140,18 @@ public struct LocalQuotaReader: Sendable {
         var renewable = false
         if candidate == nil {
             access = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
-            // A read that could not finish says nothing about the login, so
-            // stop here: no renewal run and no second read on a Mac that is
-            // already too loaded to answer, and the row says "temporarily
-            // unavailable" rather than "sign in" or "needs permission".
-            if access == .temporarilyUnavailable {
-                return ProviderRead(provider: provider, windows: [],
-                                    issue: ClaudeLoginState.temporarilyUnavailable.issue)
-            }
             var keychainRoot = credentialRoot(access)
             candidate = ClaudeOAuthParser.validOAuth(in: keychainRoot, now: now())
             renewable = ClaudeOAuthParser.isRenewable(in: file, now: now())
                 || ClaudeOAuthParser.isRenewable(in: keychainRoot, now: now())
-            // Claude Code refreshes its 8-hour access token only while it
-            // runs.  An expired-but-renewable login means it is idle, so ask
-            // it to renew its own login (at most once per 15 minutes) and
-            // read the result back.  CodeCaps never writes or refreshes it.
-            if candidate == nil, renewable,
+            // A failed credential read does not prove Claude Code is signed out.
+            // Let its quota-only command try its own login even when CodeCaps
+            // cannot see a refresh token, then reread the result.
+            // The existing throttle bounds repeated attempts and shares a run.
+            try Task.checkCancellation()
+            if candidate == nil,
                await renewalThrottle.perform(now: now(), action: renewClaudeLogin) {
+                ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
                 file = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
                 access = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
                 keychainRoot = credentialRoot(access)
@@ -172,27 +176,20 @@ public struct LocalQuotaReader: Sendable {
             payload = try await requestJSON(request)
         } catch LocalReaderError.reauth {
             // A usage 401 or 403 is never the generic "sign in again" sentence.
-            // Drop remembered bytes, try one Claude Code renewal when the login
-            // is renewable, then surface idle or signed-out wording.  Allow
-            // Access stays for a silent Keychain read that was refused, not for
-            // a token Anthropic rejected.
-            ClaudeCredentialSource.resetRememberedCredential()
-            let rejectionFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? file
-            let rejectionAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
-            let rejectionKeychain = credentialRoot(rejectionAccess)
-            let mayRenewAfterRejection =
-                ClaudeOAuthParser.canRenewAfterUsageRejection(in: rejectionFile, now: now())
-                || ClaudeOAuthParser.canRenewAfterUsageRejection(in: rejectionKeychain, now: now())
-            var renewed = false
-            if mayRenewAfterRejection {
-                renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
-            }
+            // Invalidate remembered bytes and let Claude Code try its own login
+            // without requiring CodeCaps to see a refresh token first.
+            // A rejected readable token is not a Keychain consent failure.
+            ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+            var recoveryFile = file
+            var recoveryAccess = access
+            try Task.checkCancellation()
+            let renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
             if renewed {
-                let refreshedFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
-                let refreshedAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
-                let refreshedKeychain = credentialRoot(refreshedAccess)
-                if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: refreshedFile, now: now())
-                    ?? ClaudeOAuthParser.validOAuth(in: refreshedKeychain, now: now()),
+                ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+                recoveryFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
+                recoveryAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+                if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: recoveryFile, now: now())
+                    ?? ClaudeOAuthParser.validOAuth(in: credentialRoot(recoveryAccess), now: now()),
                    let refreshedToken = firstString(refreshedOAuth, ["accessToken", "access_token"]) {
                     var retryRequest = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
                     retryRequest.httpMethod = "GET"
@@ -211,11 +208,23 @@ public struct LocalQuotaReader: Sendable {
                     }
                 }
             }
-            let idleAfterRejection = ClaudeOAuthParser.isRenewable(in: rejectionFile, now: now())
-                || ClaudeOAuthParser.isRenewable(in: rejectionKeychain, now: now())
-            let issue = idleAfterRejection ? ClaudeLoginState.idle.issue : ClaudeLoginState.signedOut.issue
-            return ProviderRead(provider: provider, windows: [], issue: issue,
-                                needsConsent: false)
+            if !renewed {
+                // The throttle limits Claude Code execution, not silent state
+                // discovery. A file-sourced rejected token may coexist with a
+                // renewable Keychain grant we never needed before the request.
+                recoveryFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
+                recoveryAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+            }
+            let recoveryRoot = credentialRoot(recoveryAccess)
+            let readableLogin = ClaudeOAuthParser.validOAuth(in: recoveryFile, now: now()) != nil
+                || ClaudeOAuthParser.validOAuth(in: recoveryRoot, now: now()) != nil
+            let state = ClaudeLoginState.resolve(
+                hasUsableCredential: false,
+                access: readableLogin ? .missing : recoveryAccess,
+                renewable: ClaudeOAuthParser.canRenewAfterUsageRejection(in: recoveryFile, now: now())
+                    || ClaudeOAuthParser.canRenewAfterUsageRejection(in: recoveryRoot, now: now()))
+            return ProviderRead(provider: provider, windows: [], issue: state.issue,
+                                needsConsent: state.needsConsent)
         }
         let details = await claudeUsageDetails(payload: payload, usageRequest: request)
         let windows = parseClaude(payload, planType: claudePlanName(oauth), observedAt: now()).map { value in
@@ -508,14 +517,36 @@ public struct LocalQuotaReader: Sendable {
 
     private func readAntigravity() async throws -> ProviderRead {
         let provider = Provider.antigravity
-        let data = try await runAntigravity()
-        guard data.count <= Self.maxProcessOutputBytes,
-              let object = try? JSONSerialization.jsonObject(with: data) else {
+        let outcome = await antigravityCoordinator.perform(
+            now: now(),
+            operation: { try await self.runAntigravity() },
+            isCacheable: { data in
+                // Never let malformed or window-free output become the cached
+                // good fetch: it would mask recovery for the whole interval.
+                guard data.count <= Self.maxProcessOutputBytes,
+                      let object = try? JSONSerialization.jsonObject(with: data) else { return false }
+                return !parseAntigravity(object, observedAt: Date()).isEmpty
+            })
+        let data: Data
+        let observedAt: Date
+        switch outcome {
+        case .fetched(let fetched, let at), .cached(let fetched, let at):
+            data = fetched
+            observedAt = at
+        case .failed(let error):
+            if error is CancellationError { throw CancellationError() }
+            if let failure = error as? LocalReaderError, failure == .interactiveSignInRequired {
+                return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Antigravity quota", observedAt: now())], issue: failure.message, needsConsent: true)
+            }
             return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Antigravity quota", observedAt: now())], issue: "Antigravity quota output was unavailable.")
         }
-        let windows = parseAntigravity(object, observedAt: now())
+        guard data.count <= Self.maxProcessOutputBytes,
+              let object = try? JSONSerialization.jsonObject(with: data) else {
+            return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Antigravity quota", observedAt: observedAt)], issue: "Antigravity quota output was unavailable.")
+        }
+        let windows = parseAntigravity(object, observedAt: observedAt)
         guard !windows.isEmpty else {
-            return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Antigravity quota", observedAt: now())], issue: "Antigravity returned no readable quota windows.")
+            return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Antigravity quota", observedAt: observedAt)], issue: "Antigravity returned no readable quota windows.")
         }
         return ProviderRead(provider: provider, windows: windows, issue: nil)
     }
@@ -567,15 +598,17 @@ private struct ProviderRead: Sendable {
     let provider: Provider
     let windows: [QuotaWindow]
     let issue: String?
-    /// True only for the Claude reader, and only when a Claude Code login is
-    /// present but this build has not been allowed to read it.
+    /// True when the provider's data needs a user sign-in step CodeCaps will
+    /// not perform in the background: a Claude Code login this build has not
+    /// been allowed to read, or an Antigravity install whose one-time
+    /// `antigravity-usage login` (or Antigravity sign-in) is still pending.
     var needsConsent: Bool = false
 }
 
 private enum LocalReaderError: Error {
-    case unavailable, malformed, reauth
+    case unavailable, malformed, reauth, interactiveSignInRequired
     var message: String {
-        switch self { case .unavailable: return "Quota source is unavailable."; case .malformed: return "Quota response was unavailable."; case .reauth: return "This account needs you to sign in again." }
+        switch self { case .unavailable: return "Quota source is unavailable."; case .malformed: return "Quota response was unavailable."; case .reauth: return "This account needs you to sign in again."; case .interactiveSignInRequired: return "Antigravity needs a one-time interactive sign-in that CodeCaps will not start in the background. Run `antigravity-usage login` in a terminal (or open Antigravity), and its quota returns on the next refresh." }
     }
 }
 
@@ -1115,17 +1148,73 @@ private extension LocalQuotaReader {
         }
     }
 
-    static func makeAntigravityRunner(homeDirectory: URL) -> @Sendable () async throws -> Data {
+}
+
+extension LocalQuotaReader {
+    /// Reads only the head of a candidate `antigravity-usage` executable to
+    /// decide what spawning it can do.  The retired CC-234 bridge forwards to
+    /// the `agy` CLI, which drops into an interactive sign-in - opening the
+    /// default browser - when two invocations overlap or its saved login is
+    /// rejected, and a background quota poll has nowhere to put that flow.
+    /// The npm `antigravity-usage` reader's quota subcommand only prints and
+    /// exits non-zero in those states (verified against v0.2.9), so it is the
+    /// only kind a background refresh may run.
+    ///
+    /// Marker text alone is not trusted: a hand-written wrapper can copy a
+    /// node shebang and the package name.  A reader candidate must also
+    /// resolve (following symlinks) into a directory named `antigravity-usage`
+    /// - the npm global package layout - so a stray script or wrapper named
+    /// `antigravity-usage` in a bin directory is treated as sign-in-capable
+    /// and skipped, as is anything else unrecognized.
+    static func antigravityCLIKind(at path: String) -> AntigravityCLIKind {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return .unknown }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 16_384),
+              let text = String(data: head, encoding: .utf8) else { return .unknown }
+        if text.contains("CC-234 quota bridge") { return .agyBridge }
+        // The literal package name in the head is only a hint: a bundled
+        // target (for example dist/index.js) may never repeat it, and genuine
+        // npm installs must still classify.  What proves the reader is a node
+        // script whose symlink-resolved path lives inside a directory named
+        // `antigravity-usage` - the npm global package layout.
+        guard text.hasPrefix("#!/usr/bin/env node") else { return .unknown }
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        return resolved.dropLast().contains("antigravity-usage") ? .npmReader : .unknown
+    }
+
+    static func makeAntigravityRunner(
+        homeDirectory: URL,
+        spawn: (@Sendable (String, [String], URL) async throws -> Data)? = nil
+    ) -> @Sendable () async throws -> Data {
         let candidates = [
             homeDirectory.appendingPathComponent(".local/bin/antigravity-usage").path,
             "/opt/homebrew/bin/antigravity-usage",
             "/usr/local/bin/antigravity-usage",
         ]
+        // tokens.json is the npm reader's own login store, not a guess:
+        // the installed package (v0.2.9) builds exactly this path from its
+        // config directory (dist/index.js: getConfigDir + "tokens.json").
+        // Without it there is no saved login to refresh, and the remaining
+        // paths reach an interactive sign-in this reader must not start.
+        let tokensPath = homeDirectory
+            .appendingPathComponent("Library/Application Support/antigravity-usage/tokens.json").path
         return {
-            guard let path = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { throw LocalReaderError.unavailable }
-            return try await BoundedQuotaProcess().run(
-                path: path, arguments: ["quota", "--json", "--refresh"], home: homeDirectory,
-                timeout: processTimeout, maxBytes: maxProcessOutputBytes)
+            var foundCLI = false
+            for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
+                foundCLI = true
+                guard Self.antigravityCLIKind(at: path) == .npmReader else { continue }
+                // The npm reader refreshes its own saved tokens silently over
+                // HTTPS.  Without that saved login the only remaining paths
+                // reach an interactive sign-in, so stop before spawning.
+                guard FileManager.default.fileExists(atPath: tokensPath) else {
+                    throw LocalReaderError.interactiveSignInRequired
+                }
+                if let spawn { return try await spawn(path, ["quota", "--json", "--refresh"], homeDirectory) }
+                return try await BoundedQuotaProcess().run(
+                    path: path, arguments: ["quota", "--json", "--refresh"], home: homeDirectory,
+                    timeout: processTimeout, maxBytes: maxProcessOutputBytes)
+            }
+            throw foundCLI ? LocalReaderError.interactiveSignInRequired : LocalReaderError.unavailable
         }
     }
 }
@@ -1178,4 +1267,175 @@ public final class ClaudeRenewalThrottle: @unchecked Sendable {
         }
         return true
     }
+}
+
+
+/// Keeps background Antigravity quota reads from overlapping two CLI
+/// invocations or respawning on every tick: concurrent callers join the one
+/// in-flight run, and a run that succeeded less than `minimumInterval` ago is
+/// served from memory with its real fetch time.  Failures are never cached,
+/// so the next tick tries again.  The default instance is process-wide; tests
+/// pass their own.
+public final class AntigravityRunCoordinator: @unchecked Sendable {
+    public static let shared = AntigravityRunCoordinator()
+
+    enum Outcome {
+        case fetched(Data, at: Date)
+        case cached(Data, at: Date)
+        case failed(Error)
+    }
+
+    public let minimumInterval: TimeInterval
+    private let lock = NSLock()
+    private var inFlight: Task<Outcome, Never>?
+    private var lastGood: (at: Date, data: Data)?
+    private var waiters = 0
+    private var generation = 0
+
+    public convenience init(minimumInterval: TimeInterval = 3 * 60) {
+        self.init(minimumInterval: minimumInterval, date: { Date() })
+    }
+
+    /// `date` stamps completed fetches; tests inject a controllable clock so
+    /// fetch duration is visible without wall-clock sleeps.
+    init(minimumInterval: TimeInterval, date: @escaping @Sendable () -> Date) {
+        self.minimumInterval = minimumInterval
+        self.date = date
+    }
+
+    private let date: @Sendable () -> Date
+
+    /// Test seam: invoked after a caller registers, outside the lock - `true`
+    /// when it joined the in-flight run, `false` when it owns a new run.
+    /// Lets tests prove a second caller arrived mid-run without sleeps.
+    var onRegister: (@Sendable (Bool) -> Void)?
+
+    /// Test seam: invoked after the shared run's outcome arrives and before
+    /// the caller's bookkeeping, `true` for the owner.  Lets tests park a
+    /// finished caller between completion and bookkeeping without timing.
+    var beforeBookkeeping: (@Sendable (Bool) async -> Void)?
+
+    /// Resume-once box: a cancelled joiner returns promptly while the shared
+    /// run keeps going for the callers that remain.
+    private final class OutcomeBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Outcome, Never>?
+
+        func arm(_ continuation: CheckedContinuation<Outcome, Never>) {
+            lock.lock()
+            self.continuation = continuation
+            lock.unlock()
+        }
+
+        func resume(with outcome: Outcome) {
+            lock.lock()
+            let continuation = continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume(returning: outcome)
+        }
+    }
+
+    /// Runs one shared operation.  `now` is the caller's clock for expiry
+    /// checks; fetched data is stamped with the completion time.  A result is
+    /// cached only when `isCacheable` accepts it, so bytes the caller will
+    /// reject as unreadable are never served back as a good fetch.
+    func perform(
+        now: Date,
+        operation: @escaping @Sendable () async throws -> Data,
+        isCacheable: (@Sendable (Data) -> Bool)? = nil
+    ) async -> Outcome {
+        let task: Task<Outcome, Never>
+        var isOwner = false
+        lock.lock()
+        if let running = inFlight {
+            task = running
+            waiters += 1
+        } else {
+            if let lastGood {
+                let elapsed = now.timeIntervalSince(lastGood.at)
+                if elapsed >= 0, elapsed < minimumInterval {
+                    lock.unlock()
+                    return .cached(lastGood.data, at: lastGood.at)
+                }
+            }
+            let created = Task<Outcome, Never> {
+                do {
+                    let data = try await operation()
+                    return .fetched(data, at: date())
+                } catch {
+                    return .failed(error)
+                }
+            }
+            inFlight = created
+            task = created
+            isOwner = true
+            waiters = 1
+            generation += 1
+        }
+        let gen = generation
+        lock.unlock()
+        onRegister?(!isOwner)
+        // The owner's cancellation kills the shared CLI run;  a joining
+        // caller's cancellation leaves it alive for the callers that remain.
+        // A result nobody is left to consume must not become the cached good
+        // fetch.
+        let outcome: Outcome
+        if isOwner {
+            outcome = await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                lock.lock()
+                // A caller whose run has already rotated out must not count
+                // itself against the generation that replaced it.
+                let lastOne = gen == generation && waiters <= 1
+                lock.unlock()
+                task.cancel()
+            }
+        } else {
+            // `Task.value` ignores cancellation, so race the shared run
+            // against the caller's own cancellation: a cancelled joiner
+            // returns `.failed(CancellationError())` at once instead of
+            // hanging until the CLI run finishes.
+            let box = OutcomeBox()
+            outcome = await withTaskCancellationHandler {
+                await withCheckedContinuation { (cont: CheckedContinuation<Outcome, Never>) in
+                    box.arm(cont)
+                    Task { box.resume(with: await task.value) }
+                }
+            } onCancel: {
+                box.resume(with: .failed(CancellationError()))
+                lock.lock()
+                // A caller whose run has already rotated out must not count
+                // itself against the generation that replaced it.
+                let lastOne = gen == generation && waiters <= 1
+                lock.unlock()
+                if lastOne { task.cancel() }
+            }
+        }
+        await beforeBookkeeping?(isOwner)
+        lock.lock()
+        // Bookkeeping applies only to the run this caller joined.  A caller
+        // whose outcome arrived before a new run started must not decrement
+        // the new run's waiters or clear its slot.
+        if gen == generation {
+            waiters = max(0, waiters - 1)
+            if isOwner {
+                inFlight = nil
+                if case .fetched(let data, let at) = outcome,
+                   !Task.isCancelled,
+                   isCacheable?(data) ?? true {
+                    lastGood = (at: at, data: data)
+                }
+            }
+        }
+        lock.unlock()
+        return outcome
+    }
+}
+
+/// What a candidate `antigravity-usage` executable is safe for; see
+/// `LocalQuotaReader.antigravityCLIKind(at:)`.
+enum AntigravityCLIKind: Equatable {
+    case npmReader, agyBridge, unknown
 }

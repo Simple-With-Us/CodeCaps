@@ -62,4 +62,15 @@ final class PlanMismatchWarningTests: XCTestCase {
         cycle.beginOpen()
         XCTAssertEqual(cycle.warnings(windows: [value], customInfo: settings, now: now).count, 1)
     }
+
+    /// Cursor's unified plans report `unified_ultra`; an entered "Ultra" is
+    /// the same plan, so the popup must not fire for it.
+    func testCursorUnifiedUltraMatchesEnteredUltra() {
+        let cursor = QuotaWindow(id: "local-mac:cursor:unknown", provider: "Cursor", providerKey: "cursor",
+                                 label: "Included plan", planName: "unified_ultra",
+                                 occurredAt: ISO8601DateFormatter().string(from: now))
+        var cycle = PlanWarningCycle()
+        cycle.beginOpen()
+        XCTAssertTrue(cycle.warnings(windows: [cursor], customInfo: ["cursor": .init(planName: "Ultra")], now: now).isEmpty)
+    }
 }
