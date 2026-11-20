@@ -912,7 +912,30 @@ public enum WidgetPresentation {
                  "minimax:general:interval", "minimax:coding-plan", "coding-plan":
                 return "minimax:plan"
             default:
-                return series
+                break
+            }
+            // The local reader's other MiniMax series carry the same
+            // cadence suffix (local-mac:minimax:video:interval reduces to
+            // "video:interval") where the collector ships the bare series
+            // ("video"), so the local copy keyed apart from its collector
+            // twin and both video rows survived the merge.  Alias any
+            // remaining cadence-suffixed or provider-prefixed form to its
+            // base series;  the cadence leg of the key comes from the
+            // window token, not the series, so this cannot fold one
+            // model's distinct cadences together (kody, PR #524).
+            var base = candidate
+            if base.hasPrefix("minimax:") {
+                base = String(base.dropFirst("minimax:".count))
+            }
+            for suffix in [":interval", ":weekly"] where base.hasSuffix(suffix) {
+                base = String(base.dropLast(suffix.count))
+                break
+            }
+            switch base {
+            case "general", "minimax:general", "minimax:coding-plan", "coding-plan":
+                return "minimax:plan"
+            default:
+                return base.isEmpty || base == candidate ? series : base
             }
         }
         // xAI's single subscription credit pool under two producer
