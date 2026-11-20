@@ -293,6 +293,31 @@ final class WidgetParseContractTests: XCTestCase {
                        "only the merged video row is flagged: \(minimax.windows.map { $0.id })")
     }
 
+    /// A producer that ships the canonical alias itself (series
+    /// "minimax:plan") keys on the same allowance as the general-family
+    /// copies:  the prefix strip must not reduce it to a bare "plan" key
+    /// no alias can produce, or the 5h allowance renders twice (kody,
+    /// PR #524).
+    func testMiniMaxCanonicalPlanSeriesMergesWithGeneralCopy() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-11-14T21:44:00Z")!
+        let stamp = "2026-11-14T21:29:14.000Z"
+        let reset5h = "2026-11-15T00:00:00.000Z"
+        let reset7d = "2026-11-16T00:00:00.000Z"
+        let payload = [
+            wire("[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"minimax:plan\"]", "minimax", "5h", 97, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+            wire("[\"producer\",\"9e107d9d-372b-4c81-9a2a-111111111111\",\"general\"]", "minimax", "5h", 96, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+            wire("[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"minimax:general:weekly\"]", "minimax", "weekly", 18, "7-day window", model: "general", stamp: stamp, reset: reset7d),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]), now: now)
+        let minimax = try XCTUnwrap(parsed.first { $0.providerKey == "minimax" })
+        XCTAssertEqual(minimax.windows.count, 2,
+                       "the canonical-series 5h copy merges with the general copy: \(minimax.windows.map { $0.id })")
+        let pair = try XCTUnwrap(minimax.dualWindows(now: now))
+        XCTAssertEqual(pair.window1.cadenceToken, "5h")
+        XCTAssertEqual(pair.window2.cadenceToken, "7d")
+    }
+
     /// The pushed-series shape the current publisher emits (bucketIds
     /// `minimax:general`, `minimax:general:weekly`, `minimax:video`):  the
     /// Mac's interval copy and the collector's `general` copy are one
