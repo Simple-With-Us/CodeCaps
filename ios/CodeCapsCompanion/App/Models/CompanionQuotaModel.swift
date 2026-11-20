@@ -2949,7 +2949,7 @@ public final class CompanionQuotaModel: ObservableObject {
             case "general", "minimax:general", "minimax:coding-plan", "coding-plan", "plan":
                 return "minimax:plan"
             default:
-                return base.isEmpty || base == candidate ? series : base
+                return base.isEmpty ? series : base
             }
         }
         // xAI's single subscription credit pool under two producer
@@ -2961,7 +2961,7 @@ public final class CompanionQuotaModel: ObservableObject {
         // capture (2026-11-06) shows both copies at the same reset second
         // and reading.  Bounded to the subscription pool;  every other xAI
         // series keeps its own identity.
-        if providerKey == "xai", series == "grok:subscription" {
+        if providerKey == "xai", series.lowercased() == "grok:subscription" {
             return "xai:subscription"
         }
         return series
