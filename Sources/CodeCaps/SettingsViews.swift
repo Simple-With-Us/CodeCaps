@@ -536,12 +536,12 @@ struct SettingsSourcesFleetPage: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else if let issue {
                 Text(issue)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if !healthy && model.localEnabled {
                 Text("Not signed in locally.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if needsConsent { claudeConsentControls }
@@ -578,12 +578,12 @@ struct SettingsSourcesFleetPage: View {
                 }
             }
             Text("macOS will ask once." + sentenceGap + "Choose Always Allow.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let claudeConsentMessage {
                 Text(claudeConsentMessage)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(claudeConsentSucceeded ? Theme.success : Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -620,7 +620,7 @@ struct SettingsSourcesFleetPage: View {
                 Text("CodeCaps pulls each provider's quota from whichever sources can answer." + sentenceGap
                      + "Turn a source off to drop its windows everywhere — the menu bar, Docked Bar, and Console all skip it." + sentenceGap
                      + "Reorder to tell CodeCaps which source wins when two disagree; the top of the list is preferred, the bottom is the fallback.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -638,10 +638,10 @@ struct SettingsSourcesFleetPage: View {
                 PlatformLogo(providerKey: providerKey, size: 16,
                              style: model.markStyle(for: providerKey))
                 Text(label)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                 Spacer()
                 Text("\(sources.count) sources")
-                    .font(.system(size: 10))
+                    .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
             ForEach(Array(sources.enumerated()), id: \.element) { index, source in
@@ -668,14 +668,14 @@ struct SettingsSourcesFleetPage: View {
                 .accessibilityLabel(enabled ? "Hide windows from \(source)" : "Show windows from \(source)")
 
             Text(source)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(.callout, design: .monospaced))
                 .foregroundStyle(enabled ? Theme.ink : .secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Text("#\(index + 1)")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(.caption2, design: .monospaced).weight(.medium))
                 .foregroundStyle(.tertiary)
                 .frame(width: 24, alignment: .trailing)
 
@@ -710,7 +710,7 @@ private struct ReauthorizeCaption: View {
     var body: some View {
         Text("This build cannot read the saved token yet." + sentenceGap
              + "Re-authorize it, or paste the token again.")
-            .font(.system(size: 11))
+            .font(.caption)
             .foregroundStyle(Theme.warning)
             .textCase(nil)
             .fixedSize(horizontal: false, vertical: true)
@@ -741,7 +741,7 @@ private struct ReauthorizeCaption: View {
             .disabled(!pushEnabled)
 
             if pushDirty {
-                Text("Unsaved changes").font(.system(size: 11)).foregroundStyle(Theme.warning)
+                Text("Unsaved changes").font(.caption).foregroundStyle(Theme.warning)
             }
             HStack(spacing: 10) {
                 if model.syncTokenState.needsReauthorization {
@@ -792,7 +792,7 @@ private struct ReauthorizeCaption: View {
             }
             if let pushMessage {
                 Text(pushMessage)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(pushSucceeded ? Theme.success : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -802,7 +802,7 @@ private struct ReauthorizeCaption: View {
                     Eyebrow("SHARE THIS MAC")
                     Spacer()
                     Text(model.lastSyncTime.map { "Pushed \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pushed")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .textCase(nil)
                 }
@@ -813,7 +813,7 @@ private struct ReauthorizeCaption: View {
                 }
                 if let pushError = model.lastSyncError {
                     Text("Last push failed." + sentenceGap + pushError)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(Theme.danger)
                         .textCase(nil)
                         .fixedSize(horizontal: false, vertical: true)
@@ -821,7 +821,7 @@ private struct ReauthorizeCaption: View {
             }
         } footer: {
             Text("The Push Token is stored in your Keychain, never in a preference file.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -870,7 +870,7 @@ private struct ReauthorizeCaption: View {
                 .onSubmit(savePull)
 
             if pullDirty {
-                Text("Unsaved changes").font(.system(size: 11)).foregroundStyle(Theme.warning)
+                Text("Unsaved changes").font(.caption).foregroundStyle(Theme.warning)
             }
             HStack(spacing: 10) {
                 if model.readTokenState.needsReauthorization {
@@ -921,7 +921,7 @@ private struct ReauthorizeCaption: View {
             }
             if let pullMessage {
                 Text(pullMessage)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(pullSucceeded ? Theme.success : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -937,13 +937,13 @@ private struct ReauthorizeCaption: View {
                         Label("Open Web Dashboard", systemImage: "arrow.up.right.square")
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .textCase(nil)
                     .help("Open Web Dashboard")
                     .accessibilityLabel("Open Web Dashboard")
                 }
                 Text(model.lastPullTime.map { "Pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pulled")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .textCase(nil)
             }
@@ -952,7 +952,7 @@ private struct ReauthorizeCaption: View {
                 }
                 if let pullError = model.serverError {
                     Text("Last pull failed." + sentenceGap + pullError)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(Theme.danger)
                         .textCase(nil)
                         .fixedSize(horizontal: false, vertical: true)
@@ -960,7 +960,7 @@ private struct ReauthorizeCaption: View {
             }
         } footer: {
             Text("Refreshes every 5 minutes while CodeCaps is running.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
@@ -1019,7 +1019,7 @@ private struct AccentPicker: View {
     var body: some View {
         HStack(spacing: 8) {
             Text("Accent")
-                .font(.system(size: 12))
+                .font(.callout)
             ForEach(AccentChoice.allCases) { choice in
                 // A real Button: a tap gesture on a shape is invisible to
                 // keyboard focus and VoiceOver control search (Slice 4).
@@ -1093,7 +1093,7 @@ struct SettingsAppearancePage: View {
                     .accessibilityLabel("Dynamic Pacing Highlights")
             } footer: {
                 Text(footerCopy)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -1156,7 +1156,7 @@ struct SettingsLogoStylePage: View {
                          + "An optional dark appearance variant can also be supplied.")
                     Text("Custom files are stored in ~/Library/Application Support/CodeCaps/CustomMarks/.")
                 }
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -1172,7 +1172,7 @@ struct SettingsLogoStylePage: View {
             HStack(spacing: 10) {
                 PlatformLogo(providerKey: providerKey, size: 18, style: style)
                 Text(label(for: providerKey))
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                 Spacer()
                 Picker("", selection: Binding(
                     get: { model.markStyle(for: providerKey) },
@@ -1194,7 +1194,7 @@ struct SettingsLogoStylePage: View {
             if style != .custom, PlatformLogoImage.isMonochromeMark(providerKey) {
                 Text("Single-colour mark." + sentenceGap
                      + "Standard and Light/Dark look the same here, because this artwork has no brand colour to preserve.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1211,7 +1211,7 @@ struct SettingsLogoStylePage: View {
 
                     HStack(spacing: 8) {
                         Text(customDarkURL == nil ? "Image:" : "Light Appearance:")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                             .frame(width: 105, alignment: .leading)
                         Button(customURL == nil ? "Choose File…" : "Replace…") {
@@ -1220,7 +1220,7 @@ struct SettingsLogoStylePage: View {
                         .buttonStyle(.bordered)
                         if let customURL {
                             Text(customURL.lastPathComponent)
-                                .font(.system(size: 11))
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -1228,18 +1228,18 @@ struct SettingsLogoStylePage: View {
                                 NSWorkspace.shared.activateFileViewerSelecting([customURL])
                             }
                             .buttonStyle(.borderless)
-                            .font(.system(size: 11))
+                            .font(.caption)
                             Button("Remove", role: .destructive) {
                                 model.clearCustomMark(for: providerKey, isDarkMode: false)
                             }
                             .buttonStyle(.borderless)
-                            .font(.system(size: 11))
+                            .font(.caption)
                         }
                     }
 
                     HStack(spacing: 8) {
                         Text("Dark Appearance:")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                             .frame(width: 105, alignment: .leading)
                         Button(customDarkURL == nil ? "Choose File (Optional)…" : "Replace Dark…") {
@@ -1248,7 +1248,7 @@ struct SettingsLogoStylePage: View {
                         .buttonStyle(.bordered)
                         if let customDarkURL {
                             Text(customDarkURL.lastPathComponent)
-                                .font(.system(size: 11))
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
