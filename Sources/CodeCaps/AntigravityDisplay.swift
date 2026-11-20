@@ -77,6 +77,10 @@ struct DisplaySection: Identifiable, Equatable {
     let resetAt: Date?
     /// Windows whose reported percentage must not be believed.
     let maskedWindowIds: Set<String>
+    /// The id of the window that set `remainingPercent`, captured at construction
+    /// so the lookup stays stable when two snapshots in the same row tie on
+    /// their percentage.  Without this hint, every refresh is a coin flip.
+    let drivingWindowId: String?
 
     var isPool: Bool { poolKey != nil }
     /// The pool's name on its own: "Gemini", "Third-Party".  A narrow row puts
@@ -84,11 +88,18 @@ struct DisplaySection: Identifiable, Equatable {
     var poolTitle: String? { poolKey.map(AntigravityDisplay.poolTitle) }
 
     /// The window this row speaks for, used for freshness and attribution.
+    /// When two windows tie on their remaining percentage, prefer the one whose
+    /// id matches `drivingWindowId` (the window we already chose at construction
+    /// time), then the first match on the percentage, then the lowest percentage.
     var driving: QuotaWindowSnapshot? {
         let candidates = section.windows.filter { !$0.window.isSupplementaryVideoQuota }
-        return candidates.first { $0.remainingPercent == remainingPercent && !maskedWindowIds.contains($0.window.id) }
-            ?? candidates.filter { !maskedWindowIds.contains($0.window.id) }
-                .min { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }
+        let unmasked = candidates.filter { !maskedWindowIds.contains($0.window.id) }
+        if let preferred = drivingWindowId,
+           let match = unmasked.first(where: { $0.window.id == preferred }) {
+            return match
+        }
+        return unmasked.first { $0.remainingPercent == remainingPercent }
+            ?? unmasked.min { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }
             ?? candidates.first
     }
 
@@ -143,6 +154,10 @@ struct DisplaySection: Identifiable, Equatable {
             let lastReported = scoped.windows
                 .filter { !pool.maskedWindowIds.contains($0.window.id) && $0.remainingPercent != nil && !$0.window.isSubModelLimit }
                 .min { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }
+            // The chosen driving window is captured here, so `driving` returns
+            // the same snapshot even when two windows in `scoped.windows` tie
+            // on `remainingPercent`.
+            let drivingId: String? = pool.drivingWindowId ?? lastReported?.window.id
             return DisplaySection(id: "\(section.providerKey):\(pool.key)",
                                   providerKey: section.providerKey,
                                   title: title,
@@ -151,7 +166,8 @@ struct DisplaySection: Identifiable, Equatable {
                                   poolKey: pool.key,
                                   remainingPercent: pool.remainingPercent ?? lastReported?.remainingPercent,
                                   resetAt: pool.resetAt ?? lastReported?.resetAt,
-                                  maskedWindowIds: pool.maskedWindowIds)
+                                  maskedWindowIds: pool.maskedWindowIds,
+                                  drivingWindowId: drivingId)
         }
     }
 
@@ -165,6 +181,7 @@ struct DisplaySection: Identifiable, Equatable {
                               poolKey: nil,
                               remainingPercent: section.minimumRemainingPercent ?? driving?.remainingPercent,
                               resetAt: driving?.resetAt,
-                              maskedWindowIds: [])
+                              maskedWindowIds: [],
+                              drivingWindowId: driving?.window.id)
     }
 }
