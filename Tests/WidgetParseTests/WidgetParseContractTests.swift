@@ -369,6 +369,7 @@ final class WidgetParseContractTests: XCTestCase {
     /// twin on both surfaces:  the base-series step returns the lowercased
     /// base, and the xAI comparison lowercases before matching, on the
     /// phone exactly as in the widget (kody, PR #524).
+    @MainActor
     func testSeriesNormalizationLowercasesCapitalizedSeries() {
         XCTAssertEqual(
             WidgetPresentation.normalizedAllowanceSeries(providerKey: "minimax", series: "Video"),
