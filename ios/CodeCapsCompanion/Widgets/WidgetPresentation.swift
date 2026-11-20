@@ -946,7 +946,7 @@ public enum WidgetPresentation {
             case "general", "minimax:general", "minimax:coding-plan", "coding-plan", "plan":
                 return "minimax:plan"
             default:
-                return base.isEmpty || base == candidate ? series : base
+                return base.isEmpty ? series : base
             }
         }
         // xAI's single subscription credit pool under two producer
