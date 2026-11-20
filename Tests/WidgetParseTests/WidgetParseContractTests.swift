@@ -364,6 +364,26 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertEqual(pair.window2.cadenceToken, "7d")
     }
 
+    /// A producer that capitalizes its series ("Video",
+    /// "Grok:Subscription") keys on the same allowance as its lowercase
+    /// twin on both surfaces:  the base-series step returns the lowercased
+    /// base, and the xAI comparison lowercases before matching, on the
+    /// phone exactly as in the widget (kody, PR #524).
+    func testSeriesNormalizationLowercasesCapitalizedSeries() {
+        XCTAssertEqual(
+            WidgetPresentation.normalizedAllowanceSeries(providerKey: "minimax", series: "Video"),
+            "video")
+        XCTAssertEqual(
+            CompanionQuotaModel.normalizedAllowanceSeries(providerKey: "minimax", series: "Video"),
+            "video")
+        XCTAssertEqual(
+            WidgetPresentation.normalizedAllowanceSeries(providerKey: "xai", series: "Grok:Subscription"),
+            "xai:subscription")
+        XCTAssertEqual(
+            CompanionQuotaModel.normalizedAllowanceSeries(providerKey: "xai", series: "Grok:Subscription"),
+            "xai:subscription")
+    }
+
     /// The pushed-series shape the current publisher emits (bucketIds
     /// `minimax:general`, `minimax:general:weekly`, `minimax:video`):  the
     /// Mac's interval copy and the collector's `general` copy are one
