@@ -682,6 +682,17 @@ public enum WidgetPresentation {
                                            isAtCap: window.isExhausted) {
             return countdown.isEmpty ? cue : "\(cadence) · \(cue)"
         }
+        // Only an undated window falls through here: a dated one that cue
+        // passed is fresh or its period ended, and both keep silence.  An
+        // undated bar must not read as current - silence is what a fresh bar
+        // looks like - but the reset stays dated, so the countdown stays in
+        // the caption (Kody review, PR #528).  A window with no number at
+        // all stays silent.
+        if window.observedAt == nil,
+           let cue = QuotaStalenessRule.undatedCue(hasReading: window.remainingPercent != nil
+               || window.absoluteRemaining != nil) {
+            return countdown.isEmpty ? cue : "\(cadence) · \(countdown) · \(cue)"
+        }
         guard !countdown.isEmpty else { return cadence }
         return "\(cadence) · \(countdown)"
     }
@@ -889,12 +900,53 @@ public enum WidgetPresentation {
             // Case-insensitive on purpose: a producer that ships `General`
             // or `Grok:Subscription` must hit the same alias as its lowercase
             // twin, or one allowance splits into two rows (kody, PR #369).
-            switch series.lowercased() {
-            case "general", "minimax:general", "minimax:general:weekly",
-                 "minimax:coding-plan", "coding-plan":
+            var candidate = series.lowercased()
+            // The codecaps local reader's bare ids carry a machine prefix
+            // (local-mac:minimax:general:interval) where the collector's
+            // copies carry the plain series ("general"), so a local copy
+            // keyed apart from its collector twin and both 5h rows survived
+            // the merge.  Strip the local-mac:<provider>: prefix and alias
+            // the remainder through the same table;  the remainder keeps
+            // the reader's cadence word (":interval", ":weekly"), which the
+            // cadence leg of the key already separates, and
+            // "minimax:general:weekly" is a table entry in its own right
+            // (kody, PR #524).
+            if candidate.hasPrefix("local-mac:") {
+                let rest = candidate.dropFirst("local-mac:".count)
+                if let providerEnd = rest.firstIndex(of: ":") {
+                    candidate = String(rest[rest.index(after: providerEnd)...])
+                }
+            }
+            switch candidate {
+            case "general", "general:interval", "general:weekly",
+                 "minimax:general", "minimax:general:weekly",
+                 "minimax:general:interval", "minimax:coding-plan", "coding-plan":
                 return "minimax:plan"
             default:
-                return series
+                break
+            }
+            // The local reader's other MiniMax series carry the same
+            // cadence suffix (local-mac:minimax:video:interval reduces to
+            // "video:interval") where the collector ships the bare series
+            // ("video"), so the local copy keyed apart from its collector
+            // twin and both video rows survived the merge.  Alias any
+            // remaining cadence-suffixed or provider-prefixed form to its
+            // base series;  the cadence leg of the key comes from the
+            // window token, not the series, so this cannot fold one
+            // model's distinct cadences together (kody, PR #524).
+            var base = candidate
+            if base.hasPrefix("minimax:") {
+                base = String(base.dropFirst("minimax:".count))
+            }
+            for suffix in [":interval", ":weekly"] where base.hasSuffix(suffix) {
+                base = String(base.dropLast(suffix.count))
+                break
+            }
+            switch base {
+            case "general", "minimax:general", "minimax:coding-plan", "coding-plan", "plan":
+                return "minimax:plan"
+            default:
+                return base.isEmpty ? series : base
             }
         }
         // xAI's single subscription credit pool under two producer
@@ -1150,7 +1202,7 @@ public enum WidgetPresentation {
             guard trimmedLabel != "plan details",
                   !(trimmedLabel == "plan" && w.remainingPercent == nil) else { continue }
             let parsedReset = parseDate(from: w.resetAt)
-            let observed = parseDate(from: w.occurredAt)
+            let observed = parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt)
             let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let pct = w.remainingPercent
             // The one shared rule decides, as it does on the phone and on the
@@ -1423,7 +1475,7 @@ public enum WidgetPresentation {
                 resetAt: parseDate(from: w.resetAt),
                 isExhausted: QuotaCapRule.isExhausted(remainingPercent: w.remainingPercent,
                                                       providerSaysExhausted: w.isExhausted ?? false),
-                observedAt: parseDate(from: w.occurredAt),
+                observedAt: parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt),
                 isModelDetail: true
             ))
         }

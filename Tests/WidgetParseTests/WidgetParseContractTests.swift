@@ -30,6 +30,52 @@ final class WidgetParseContractTests: XCTestCase {
         return value
     }
 
+    func testReportedReadingDateSurvivesGenericWidgetMapping() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let iso = ISO8601DateFormatter()
+        let stamp = iso.string(from: now.addingTimeInterval(-60))
+        let reset = iso.string(from: now.addingTimeInterval(3600))
+        for dateMode in ["reported-only", "reported-preferred", "occurred-fallback", "undated"] {
+            var value = wire("local-mac:cursor:weekly", "cursor", "weekly", 50,
+                             stamp: stamp, reset: reset)
+            switch dateMode {
+            case "reported-only": value.removeValue(forKey: "occurredAt")
+            case "reported-preferred": value["occurredAt"] = iso.string(from: now.addingTimeInterval(-7200))
+            case "occurred-fallback": value["reportedAt"] = "not-a-date"
+            default:
+                value.removeValue(forKey: "reportedAt")
+                value.removeValue(forKey: "occurredAt")
+            }
+            let parsed = WidgetPresentation.parseSnapshot(
+                data: try JSONSerialization.data(withJSONObject: ["windows": [value]]), now: now)
+            let window = try XCTUnwrap(parsed.first { $0.id == "cursor" }?.windows.first)
+            if dateMode == "undated" {
+                XCTAssertNil(window.observedAt)
+            } else {
+                XCTAssertEqual(window.observedAt, now.addingTimeInterval(-60), dateMode)
+            }
+            let caption = WidgetPresentation.smallWidgetCaption(window: window, now: now)
+            XCTAssertEqual(caption.contains("age unknown"), dateMode == "undated", dateMode)
+        }
+    }
+
+    func testReportedOnlyAntigravityDetailKeepsItsReadingDate() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let iso = ISO8601DateFormatter()
+        let stamp = iso.string(from: now.addingTimeInterval(-60))
+        let reset = iso.string(from: now.addingTimeInterval(3600))
+        let pool = wire("antigravity:gemini:5h", "google-antigravity", "5h", 63,
+                        "Gemini Models 5-hour", stamp: stamp, reset: reset)
+        var detail = wire("gemini:argon", "google-antigravity", "5h", 50,
+                          "Gemini Argon", model: "Argon", stamp: stamp, reset: reset)
+        detail.removeValue(forKey: "occurredAt")
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": [pool, detail]]), now: now)
+        let window = try XCTUnwrap(parsed.first { $0.id == "antigravity-gemini" }?.detailWindows.first)
+        XCTAssertEqual(window.observedAt, now.addingTimeInterval(-60))
+        XCTAssertFalse(WidgetPresentation.smallWidgetCaption(window: window, now: now).contains("age unknown"))
+    }
+
     /// The antigravity pool through the real parse path:  one Argon detail
     /// (never a duplicate), the exported pool rows winning the meters, and a
     /// spent detail never dragging the pool headline to zero.
@@ -233,6 +279,164 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertEqual(pair.window1.cadenceToken, "1d")
         XCTAssertEqual(pair.window2.cadenceToken, "7d")
         XCTAssertFalse(minimax.primaryWindows.contains(where: \.isSupplementaryVideoQuota))
+    }
+
+    /// The 2026-11-14 report, in the shapes producers emit now:  the Mac
+    /// reader's own copies ride the app-group snapshot under their bare
+    /// local ids (weekly token `1w`, no windowKey, no modelType), beside
+    /// the collector's JSON-shaped copies.  MiniMax has no real 1d plan
+    /// window, so the pair is the 5h and the 7d, the single bar is the
+    /// weekly, and the video daily never stands in for either (owner
+    /// 2026-11-14:  "the 7d bar only on small version of widget when there
+    /// isn't a real 1d quota at all").
+    func testMiniMaxMixedSnapshotShapesKeepFiveHourWeeklyPair() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-11-14T21:44:00Z")!
+        let stamp = "2026-11-14T21:29:14.000Z"
+        let reset5h = "2026-11-15T00:00:00.000Z"
+        let reset7d = "2026-11-16T00:00:00.000Z"
+        let payload = [
+            wire("local-mac:minimax:general:interval", "minimax", "5h", 97, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+            wire("local-mac:minimax:general:weekly", "minimax", "1w", 18, "7-day window", model: "general", stamp: stamp, reset: reset7d),
+            wire("local-mac:minimax:video:interval", "minimax", "1d", 100, "Video", model: "video", stamp: stamp, reset: reset5h),
+            wire("[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"general\"]", "minimax", "5h", 96, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]), now: now)
+        let minimax = try XCTUnwrap(parsed.first { $0.providerKey == "minimax" })
+        XCTAssertEqual(minimax.windows.filter { $0.isSupplementaryVideoQuota }.count, 1,
+                       "only the video daily is flagged: \(minimax.windows.map { $0.id })")
+        XCTAssertEqual(minimax.windows.count, 3,
+                       "the two 5h copies merge into one row: \(minimax.windows.map { $0.id })")
+        let pair = try XCTUnwrap(minimax.dualWindows(now: now))
+        XCTAssertEqual(pair.window1.cadenceToken, "5h")
+        XCTAssertEqual(pair.window2.cadenceToken, "7d")
+        XCTAssertEqual(pair.window2.id, "local-mac:minimax:general:weekly")
+        XCTAssertEqual(pair.window2.remainingPercent, 18)
+        XCTAssertEqual(minimax.controllingWindow(.mostUrgent)?.id, "local-mac:minimax:general:weekly",
+                       "the single-bar pick agrees with the pair's long slot")
+    }
+
+    /// The local reader's video daily (local-mac:minimax:video:interval)
+    /// and the collector's bare "video" copy are one allowance:  they
+    /// merge into a single supplementary row instead of rendering twice
+    /// (kody, PR #524).
+    func testMiniMaxLocalVideoMergesWithCollectorTwin() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-11-14T21:44:00Z")!
+        let stamp = "2026-11-14T21:29:14.000Z"
+        let reset5h = "2026-11-15T00:00:00.000Z"
+        let resetDaily = "2026-11-15T21:29:14.000Z"
+        let payload = [
+            wire("local-mac:minimax:general:interval", "minimax", "5h", 97, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+            wire("local-mac:minimax:video:interval", "minimax", "1d", 100, "Video", model: "video", stamp: stamp, reset: resetDaily),
+            wire("[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"video\"]", "minimax", "1d", 96, "Video", model: "video", stamp: stamp, reset: resetDaily),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]), now: now)
+        let minimax = try XCTUnwrap(parsed.first { $0.providerKey == "minimax" })
+        XCTAssertEqual(minimax.windows.count, 2,
+                       "the two video copies merge into one row: \(minimax.windows.map { $0.id })")
+        XCTAssertEqual(minimax.windows.filter { $0.isSupplementaryVideoQuota }.count, 1,
+                       "only the merged video row is flagged: \(minimax.windows.map { $0.id })")
+    }
+
+    /// A producer that ships the canonical alias itself (series
+    /// "minimax:plan") keys on the same allowance as the general-family
+    /// copies:  the prefix strip must not reduce it to a bare "plan" key
+    /// no alias can produce, or the 5h allowance renders twice (kody,
+    /// PR #524).
+    func testMiniMaxCanonicalPlanSeriesMergesWithGeneralCopy() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-11-14T21:44:00Z")!
+        let stamp = "2026-11-14T21:29:14.000Z"
+        let reset5h = "2026-11-15T00:00:00.000Z"
+        let reset7d = "2026-11-16T00:00:00.000Z"
+        let payload = [
+            wire("[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"minimax:plan\"]", "minimax", "5h", 97, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+            wire("[\"producer\",\"9e107d9d-372b-4c81-9a2a-111111111111\",\"general\"]", "minimax", "5h", 96, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+            wire("[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"minimax:general:weekly\"]", "minimax", "weekly", 18, "7-day window", model: "general", stamp: stamp, reset: reset7d),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]), now: now)
+        let minimax = try XCTUnwrap(parsed.first { $0.providerKey == "minimax" })
+        XCTAssertEqual(minimax.windows.count, 2,
+                       "the canonical-series 5h copy merges with the general copy: \(minimax.windows.map { $0.id })")
+        let pair = try XCTUnwrap(minimax.dualWindows(now: now))
+        XCTAssertEqual(pair.window1.cadenceToken, "5h")
+        XCTAssertEqual(pair.window2.cadenceToken, "7d")
+    }
+
+    /// A producer that capitalizes its series ("Video",
+    /// "Grok:Subscription") keys on the same allowance as its lowercase
+    /// twin on both surfaces:  the base-series step returns the lowercased
+    /// base, and the xAI comparison lowercases before matching, on the
+    /// phone exactly as in the widget (kody, PR #524).
+    func testSeriesNormalizationLowercasesCapitalizedSeries() {
+        XCTAssertEqual(
+            WidgetPresentation.normalizedAllowanceSeries(providerKey: "minimax", series: "Video"),
+            "video")
+        XCTAssertEqual(
+            CompanionQuotaModel.normalizedAllowanceSeries(providerKey: "minimax", series: "Video"),
+            "video")
+        XCTAssertEqual(
+            WidgetPresentation.normalizedAllowanceSeries(providerKey: "xai", series: "Grok:Subscription"),
+            "xai:subscription")
+        XCTAssertEqual(
+            CompanionQuotaModel.normalizedAllowanceSeries(providerKey: "xai", series: "Grok:Subscription"),
+            "xai:subscription")
+    }
+
+    /// The pushed-series shape the current publisher emits (bucketIds
+    /// `minimax:general`, `minimax:general:weekly`, `minimax:video`):  the
+    /// Mac's interval copy and the collector's `general` copy are one
+    /// allowance and merge, the weekly keeps its own row, and the pair is
+    /// again the plan's 5h and 7d.
+    func testMiniMaxPushedSeriesShapeMergesAndKeepsWeeklyPair() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-11-14T21:44:00Z")!
+        let stamp = "2026-11-14T21:29:14.000Z"
+        let reset5h = "2026-11-15T00:00:00.000Z"
+        let reset7d = "2026-11-16T00:00:00.000Z"
+        let macInterval = "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"minimax:general\"]"
+        let macWeekly = "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"minimax:general:weekly\"]"
+        let payload = [
+            wire(macInterval, "minimax", "5h", 97, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+            wire(macWeekly, "minimax", "weekly", 18, "7-day window", model: "general", stamp: stamp, reset: reset7d),
+            wire("[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"minimax:video\"]", "minimax", "1d", 100, "Video", model: "video", stamp: stamp, reset: reset5h),
+            wire("[\"producer\",\"9e107d9d-372b-4c81-9a2a-111111111111\",\"general\"]", "minimax", "5h", 96, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]), now: now)
+        let minimax = try XCTUnwrap(parsed.first { $0.providerKey == "minimax" })
+        XCTAssertEqual(minimax.windows.count, 3,
+                       "the two interval copies merge into one row: \(minimax.windows.map { $0.id })")
+        let pair = try XCTUnwrap(minimax.dualWindows(now: now))
+        XCTAssertEqual(pair.window1.cadenceToken, "5h")
+        XCTAssertEqual(pair.window2.cadenceToken, "7d")
+        XCTAssertEqual(pair.window2.id, macWeekly)
+        XCTAssertEqual(minimax.controllingWindow(.mostUrgent)?.id, macWeekly)
+    }
+
+    /// A video window whose identity fields were stripped before the
+    /// widget saw it (the label rewrite the parse comments describe:  a
+    /// "Hailuo" daily arriving as "1d window" with no model fields) is an
+    /// unflagged 1d row, but it still never takes the long slot from the
+    /// plan's real weekly while the weekly is the window nearest its cap.
+    func testMiniMaxStrippedVideoIdentityNeverTakesWeeklySlot() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-11-14T21:44:00Z")!
+        let stamp = "2026-11-14T21:29:14.000Z"
+        let reset5h = "2026-11-15T00:00:00.000Z"
+        let reset7d = "2026-11-16T00:00:00.000Z"
+        let payload = [
+            wire("[\"producer\",\"9e107d9d-372b-4c81-9a2a-111111111111\",\"general\"]", "minimax", "5h", 97, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+            wire("[\"producer\",\"Mac.Jays.Services\",\"general\"]", "minimax", "weekly", 18, "general (weekly window)", model: "general", stamp: stamp, reset: reset7d),
+            wire("[\"producer\",\"9e107d9d-372b-4c81-9a2a-111111111111\",\"video\"]", "minimax", "1d", 100, "1d window", stamp: stamp, reset: reset5h),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]), now: now)
+        let minimax = try XCTUnwrap(parsed.first { $0.providerKey == "minimax" })
+        let pair = try XCTUnwrap(minimax.dualWindows(now: now))
+        XCTAssertEqual(pair.window1.cadenceToken, "5h")
+        XCTAssertEqual(pair.window2.cadenceToken, "7d",
+                       "the stripped video daily must not displace the weekly")
+        XCTAssertEqual(pair.window2.remainingPercent, 18)
     }
 
     /// CC-223:  Claude's two plan meters survive the widget parse path and

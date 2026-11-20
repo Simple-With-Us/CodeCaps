@@ -99,6 +99,82 @@ final class UnifiedPoolSurfacesTests: XCTestCase {
                       "the row the pool filled in is at its cap too")
     }
 
+    /// A waiting participant inherits the shared exhaustion alert, while a
+    /// provider with no shared reading keeps its issue and emits no alert.
+    func testTheServedPoolSuppressesOnlyTheParticipantIssueForExhaustion() async throws {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        let cursorPlaceholder = QuotaWindow(
+            id: "local-mac:cursor:unknown",
+            provider: "Cursor",
+            providerKey: "cursor",
+            providerLabel: "Cursor",
+            sourceApp: "local-mac",
+            label: "Included plan",
+            remainingUnknown: true,
+            status: .unknown,
+            occurredAt: iso.string(from: now.addingTimeInterval(-60)),
+            source: "Cursor"
+        )
+        let grok = QuotaWindow(
+            id: "local-mac:grok:subscription",
+            provider: "Grok",
+            providerKey: "grok",
+            providerLabel: "Grok",
+            sourceApp: "local-mac",
+            label: "Subscription window",
+            remainingPercent: 0,
+            resetAt: iso.string(from: now.addingTimeInterval(6 * 86_400)),
+            window: "weekly",
+            occurredAt: iso.string(from: now.addingTimeInterval(-10)),
+            source: "Grok"
+        )
+        let unserved = QuotaWindow(
+            id: "local-mac:anthropic:5h",
+            provider: "Claude",
+            providerKey: "anthropic",
+            providerLabel: "Claude",
+            sourceApp: "local-mac",
+            label: "5-hour window",
+            remainingPercent: 0,
+            resetAt: iso.string(from: now.addingTimeInterval(5 * 3_600)),
+            window: "5h",
+            occurredAt: iso.string(from: now.addingTimeInterval(-10)),
+            source: "Claude"
+        )
+        let cursorIssue = "Cursor quota service is waiting for refresh."
+        let claudeIssue = "Claude quota service is unavailable."
+        let local = LocalQuotaResult(windows: [cursorPlaceholder, grok, unserved], issues: [
+            "cursor": cursorIssue,
+            "anthropic": claudeIssue,
+        ])
+
+        let model = MonitorModel(defaults: defaults())
+        model.skipsSnapshotIOForTesting = true
+        model.alarmManager.preferences[.quotaExhaustion] = UsageAlertOption(enabled: true, sound: .silent)
+        model.localReadForTesting = { local }
+        var alerts: [String] = []
+        model.alarmManager.onUsageDelivery = { kind, title, _, _ in
+            guard kind == .quotaExhaustion else { return }
+            alerts.append(title)
+        }
+
+        model.refresh()
+        await model.refreshTaskForTesting?.value
+
+        XCTAssertTrue(model.poolServedKeys.contains("cursor"))
+        XCTAssertNil(model.rowIssue(for: "cursor"), "the fresh shared reading serves Cursor")
+        XCTAssertEqual(model.issues["cursor"], cursorIssue, "diagnostics retain the reader issue")
+        XCTAssertEqual(model.rowIssue(for: "anthropic"), claudeIssue,
+                       "no shared reading clears the unserved provider issue")
+        XCTAssertEqual(model.issues["anthropic"], claudeIssue)
+        XCTAssertTrue(alerts.contains("Quota Exhausted: Grok"))
+        XCTAssertTrue(alerts.contains("Quota Exhausted: Cursor"),
+                      "the served placeholder inherits the pool's exhaustion alert")
+        XCTAssertFalse(alerts.contains("Quota Exhausted: Claude"),
+                       "a genuinely unserved provider issue still suppresses its alert")
+    }
+
     /// The HUD resolves its rows once per render and hands the same list to
     /// every row helper.
     ///

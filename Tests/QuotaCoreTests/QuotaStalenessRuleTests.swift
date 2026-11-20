@@ -46,4 +46,15 @@ final class QuotaStalenessRuleTests: XCTestCase {
                                          now: now)
         XCTAssertEqual(cue, "stale \u{00B7} updated \(UpdatedStamp.label(now.addingTimeInterval(-3 * 3_600), now: now))")
     }
+
+    func testAnUndatedReadingWithANumberSaysItsAgeIsUnknown() {
+        XCTAssertEqual(QuotaStalenessRule.undatedCue(hasReading: true),
+                       "unverified \u{00B7} age unknown",
+                       "a reading-bearing bar without a date never renders as silent")
+    }
+
+    func testAnUndatedReadingWithNoReadingStaysSilent() {
+        XCTAssertNil(QuotaStalenessRule.undatedCue(hasReading: false),
+                     "a status row with no reading has nothing to date")
+    }
 }

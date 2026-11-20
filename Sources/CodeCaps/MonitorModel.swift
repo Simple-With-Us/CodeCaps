@@ -527,6 +527,34 @@ final class MonitorModel: ObservableObject {
     @Published private(set) var isSyncing = false
     @Published private(set) var lastPullTime: Date?
 
+    /// Whether the push feed the iPhone and widgets read has gone quiet.
+    ///
+    /// Sharing on but no successful push within the shared freshness window
+    /// means every downstream surface is aging out.  Surfaced in the Glance
+    /// footer rather than only in Settings text: the push died silently once
+    /// (a failed token read stays failed until re-authorization) and the
+    /// owner saw accurate local numbers for a day while the phone starved
+    /// (owner, Nov-15-2026: phone frozen at the night's snapshot).
+    var isShareFeedStale: Bool {
+        guard syncEnabled else { return false }
+        // The newest successful push is what downstream surfaces age on: a
+        // transient error right after a fresh success must not flag the chip
+        // (Kody review, PR #528), but sharing with nothing pushed yet must.
+        guard let lastSyncTime else { return true }
+        return Date().timeIntervalSince(lastSyncTime) >= QuotaFreshnessRule.staleAfter
+    }
+
+    /// The footer chip's help text: what is wrong and where to fix it.
+    var shareFeedStaleHelp: String {
+        let last = lastSyncTime.map { $0.formatted(date: .omitted, time: .shortened) } ?? "never"
+        if let error = lastSyncError {
+            let state = isShareFeedStale ? "stale" : "sync error"
+            return "iPhone feed \(state), last push \(last)." + sentenceGap + error
+                + sentenceGap + "Click for Sync settings."
+        }
+        return "iPhone feed stale, last push \(last)." + sentenceGap + "Click for Sync settings."
+    }
+
     // Presentation
     @Published var appearance: AppAppearance {
         didSet { defaults.set(appearance.rawValue, forKey: "appearance") }
@@ -1721,7 +1749,9 @@ final class MonitorModel: ObservableObject {
             rows: displaySections,
             thresholdPercent: pipLowThresholdPercent,
             enabled: pipOpenWhenLow,
-            issues: issues,
+            // The rows' own issues:  a pool participant the shared reading
+            // serves (e.g. Cursor's unified placeholder) must still count.
+            issues: rowIssues,
             disabledSources: disabledSources,
             session: &pipLowQuotaSession
         )
@@ -2860,6 +2890,11 @@ final class MonitorModel: ObservableObject {
         return nil
     }
 
+    /// `issues` as the quota rows see them:  `rowIssue(for:)` for every key.
+    var rowIssues: [String: String] {
+        issues.filter { !poolServedKeys.contains($0.key) }
+    }
+
     /// File checks publish only changed local readings.  Fleet pull and push
     /// stay on the provider/manual path, so a one-minute file poll is passive.
     private func rebuildLocalState(recordSamples: Bool) {
@@ -3004,7 +3039,7 @@ final class MonitorModel: ObservableObject {
             guard snapshot.isFresh, let remaining = snapshot.remainingPercent, let observedAt = snapshot.observedAt,
                   !window.isSupplementaryVideoQuota, !masked.contains(window.id),
                   !window.remainingUnknown,
-                  issues[window.canonicalProviderKey] == nil,
+                  rowIssue(for: window.canonicalProviderKey) == nil,
                   !disabledSources.contains(window.source ?? "") else { continue }
             let key = window.canonicalProviderKey + "|" + window.id + "|" + (window.accountKey ?? "")
             let previous = exhaustionObservationState[key]
