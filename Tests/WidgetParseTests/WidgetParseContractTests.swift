@@ -270,6 +270,29 @@ final class WidgetParseContractTests: XCTestCase {
                        "the single-bar pick agrees with the pair's long slot")
     }
 
+    /// The local reader's video daily (local-mac:minimax:video:interval)
+    /// and the collector's bare "video" copy are one allowance:  they
+    /// merge into a single supplementary row instead of rendering twice
+    /// (kody, PR #524).
+    func testMiniMaxLocalVideoMergesWithCollectorTwin() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-11-14T21:44:00Z")!
+        let stamp = "2026-11-14T21:29:14.000Z"
+        let reset5h = "2026-11-15T00:00:00.000Z"
+        let resetDaily = "2026-11-15T21:29:14.000Z"
+        let payload = [
+            wire("local-mac:minimax:general:interval", "minimax", "5h", 97, "5-hour window", model: "general", stamp: stamp, reset: reset5h),
+            wire("local-mac:minimax:video:interval", "minimax", "1d", 100, "Video", model: "video", stamp: stamp, reset: resetDaily),
+            wire("[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"video\"]", "minimax", "1d", 96, "Video", model: "video", stamp: stamp, reset: resetDaily),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]), now: now)
+        let minimax = try XCTUnwrap(parsed.first { $0.providerKey == "minimax" })
+        XCTAssertEqual(minimax.windows.count, 2,
+                       "the two video copies merge into one row: \(minimax.windows.map { $0.id })")
+        XCTAssertEqual(minimax.windows.filter { $0.isSupplementaryVideoQuota }.count, 1,
+                       "only the merged video row is flagged: \(minimax.windows.map { $0.id })")
+    }
+
     /// The pushed-series shape the current publisher emits (bucketIds
     /// `minimax:general`, `minimax:general:weekly`, `minimax:video`):  the
     /// Mac's interval copy and the collector's `general` copy are one
