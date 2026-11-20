@@ -822,7 +822,10 @@ public extension QuotaResponse {
         // the two collectors' own reports are still deduped.
         func isPool(_ window: QuotaWindow) -> Bool {
             guard window.sharedPoolOrigin == nil else { return false }
-            let parts = window.id.split(separator: ":")
+            // A pulled id wraps the bucket in its producer's scope
+            // (`["producer","<id>","xai:subscription"]`); the bucket is what
+            // names the pool (CC-236).
+            let parts = UnifiedSubscriptionPool.bucketId(of: window.id).split(separator: ":")
             guard parts.count >= 2 else { return false }
             return parts[parts.count - 2] == Substring(window.canonicalProviderKey)
                 && parts[parts.count - 1] == "subscription"

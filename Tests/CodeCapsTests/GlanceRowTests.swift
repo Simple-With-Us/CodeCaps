@@ -811,6 +811,51 @@ final class GlanceMeterTests: XCTestCase {
         XCTAssertEqual(pair.long?.window.id, dashboard.window.id)
     }
 
+    // MARK: xAI's two 7d bars (CC-236)
+
+    private func xaiRow(_ windows: [QuotaWindowSnapshot]) -> DisplaySection {
+        DisplaySection(
+            id: "xai", providerKey: "xai", title: "xAI", platformTitle: "xAI",
+            section: QuotaPlatformSection(providerKey: "xai", providerLabel: "xAI", via: nil,
+                                          expected: true, windows: windows),
+            poolKey: nil, remainingPercent: windows.compactMap(\.remainingPercent).min(),
+            resetAt: windows.compactMap(\.resetAt).min(), maskedWindowIds: [])
+    }
+
+    /// The owner's screenshot (2026-11-19):  the fleet hands the xAI row one
+    /// copy of the SuperGrok pool per producer, ids wrapped in the producer's
+    /// scope and no source on either, and the row drew "7d 75%" beside
+    /// "7d 77%".  Both are the one pool, so the row draws one 7d bar.
+    func testTwoProducersCopiesOfTheXaiPoolDrawOneSevenDayBar() {
+        let resetIn: TimeInterval = 5 * 86_400 + 23 * 3_600
+        let phone = makeWindow(id: "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"grok:subscription\"]",
+                               label: "1w window", token: "7d", remaining: 77, resetIn: resetIn, provider: "xai")
+        let mac = makeWindow(id: "[\"producer\",\"Mac.Jays.Services\",\"xai:subscription\"]",
+                             label: "weekly window", token: "weekly", remaining: 75, resetIn: resetIn,
+                             provider: "xai", observedAgo: 600)
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(phone.window))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(mac.window))
+        let row = xaiRow([phone, mac])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertNotNil(pair.short)
+        XCTAssertNil(pair.long, "one pool is one 7d bar, not one per producer")
+        XCTAssertTrue(glanceExpandedLines(for: row, now: now).isEmpty,
+                      "the second copy is not an extra line under the row either")
+    }
+
+    /// The pool rule does not swallow a window that is not the pool:  the
+    /// xAI API credits beside the pool are still their own meter.
+    func testTheXaiPoolRuleLeavesOtherXaiWindowsAlone() {
+        let resetIn: TimeInterval = 5 * 86_400 + 23 * 3_600
+        let pool = makeWindow(id: "[\"producer\",\"Mac.Jays.Services\",\"xai:subscription\"]",
+                              label: "weekly window", token: "weekly", remaining: 75, resetIn: resetIn, provider: "xai")
+        let other = makeWindow(id: "xai:weekly-other", label: "weekly window", token: "weekly", remaining: 75,
+                               resetIn: resetIn, provider: "xai")
+        XCTAssertFalse(UnifiedSubscriptionPool.isPoolWindow(other.window))
+        let pair = glanceMeterPair(for: xaiRow([pool, other]), now: now)
+        XCTAssertNotNil(pair.long, "a window outside the pool from the same source is still its own meter")
+    }
+
     func testTwoAccountKeysAreTwoMeters() {
         let first = makeWindow(id: "a", label: "Grok Bot weekly", token: "weekly", remaining: 80.6,
                                resetIn: 4 * 86_400, provider: "grok-bot", source: "gbu", accountKey: "a")

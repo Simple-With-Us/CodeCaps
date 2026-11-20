@@ -1408,10 +1408,25 @@ private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
 /// And only a report of the same allowance counts (`glanceSameAllowance`): two
 /// accounts of one provider read by two sources, both labelled "Grok Bot
 /// weekly", are two meters.
+///
+/// Two reports of the unified subscription pool on one row are copies even
+/// when they name the same source, or none:  the pool is one allowance by
+/// identity, and the fleet hands the xAI row one copy per producer with no
+/// source on either, which drew two 7d bars for the one SuperGrok pool
+/// (CC-236).
 private func glanceIsCopy(_ snapshot: QuotaWindowSnapshot, of other: QuotaWindowSnapshot) -> Bool {
     glanceMeterKey(snapshot) == glanceMeterKey(other)
-        && (snapshot.window.source ?? "") != (other.window.source ?? "")
+        && ((snapshot.window.source ?? "") != (other.window.source ?? "")
+            || glanceBothReportThePool(snapshot, other))
         && glanceSameAllowance(snapshot, other)
+}
+
+/// Whether both windows are one participant's reports of the unified
+/// subscription pool (`UnifiedSubscriptionPool.isPoolWindow`).
+private func glanceBothReportThePool(_ lhs: QuotaWindowSnapshot, _ rhs: QuotaWindowSnapshot) -> Bool {
+    lhs.window.canonicalProviderKey == rhs.window.canonicalProviderKey
+        && UnifiedSubscriptionPool.isPoolWindow(lhs.window)
+        && UnifiedSubscriptionPool.isPoolWindow(rhs.window)
 }
 
 /// Whether two readings of one meter could be the same allowance read twice,
@@ -1968,6 +1983,10 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
         if let known = holders[key(snapshot)],
            !known.contains(where: { source($0) == source(snapshot) }),
            known.contains(where: { glanceSameAllowance($0, snapshot) }) { continue }
+        // A second report of the unified pool is the row's own number again,
+        // whatever source it names (CC-236).
+        if let known = holders[key(snapshot)],
+           known.contains(where: { glanceIsCopy(snapshot, of: $0) }) { continue }
         holders[key(snapshot), default: []].append(snapshot)
         rest.append(snapshot)
     }
