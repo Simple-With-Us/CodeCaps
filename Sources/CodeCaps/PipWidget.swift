@@ -847,7 +847,7 @@ private struct PipResizeGrip: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .gesture(
-            DragGesture(minimumDistance: 1, coordinateSpace: .global): 1)
+            DragGesture(minimumDistance: 1, coordinateSpace: .global)
                 .onChanged { value in
                     resize(by: value.translation)
                 }
