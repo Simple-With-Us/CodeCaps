@@ -73,6 +73,21 @@ public struct CursorQuotaReader: Sendable {
             guard (200..<300).contains(summaryResult.statusCode) else {
                 return LocalQuotaResult(issues: ["cursor": "Cursor quota service is unavailable."])
             }
+            // A unified plan's included allowance is the shared xAI pool, and
+            // the usage summary only knows the monthly billing cycle's dollar
+            // meter.  That meter is not the pool:  it read `1m` at 100% beside
+            // Grok, xAI and Grok Bot's live `7d` reading of the same pool
+            // (owner 2026-11-12).  When the weekly period read gave no pool
+            // reading, the row is the pool's placeholder, which the shared
+            // pool fills in place with the live weekly reading, and the plan
+            // name still travels with it for plan detection.
+            if cursorUnifiedMembership(planName: membershipType) {
+                // The issue explains an empty row only while no participant
+                // has a pool reading; the rows drop it once the pool stands in.
+                return LocalQuotaResult(
+                    windows: [cursorUnknownWindow(observedAt: observedAt, planName: planName)],
+                    issues: ["cursor": "Cursor's included plan uses the shared Grok Bot pool. Waiting for this week's reading."])
+            }
             let windows = parseSummary(root, observedAt: observedAt)
             guard !windows.isEmpty else {
                 return LocalQuotaResult(windows: [cursorUnknownWindow(observedAt: observedAt)], issues: ["cursor": "Cursor returned no readable included quota."])
@@ -222,8 +237,8 @@ private func cursorWindow(id: String, label: String, values: [String: Any], rese
     ).normalizedForExport()
 }
 
-private func cursorUnknownWindow(observedAt: Date) -> QuotaWindow {
-    QuotaWindow(id: "local-mac:cursor:unknown", provider: "Cursor", providerKey: "cursor", providerLabel: "Cursor", sourceApp: "local-mac", label: "Included plan", remainingUnknown: true, status: .unknown, occurredAt: cursorISOFormatter.string(from: observedAt), source: "Cursor")
+private func cursorUnknownWindow(observedAt: Date, planName: String? = nil) -> QuotaWindow {
+    QuotaWindow(id: "local-mac:cursor:unknown", provider: "Cursor", providerKey: "cursor", providerLabel: "Cursor", sourceApp: "local-mac", label: "Included plan", planName: planName, remainingUnknown: true, status: .unknown, occurredAt: cursorISOFormatter.string(from: observedAt), source: "Cursor")
 }
 
 private func finiteNumber(_ value: Any?) -> Double? {
