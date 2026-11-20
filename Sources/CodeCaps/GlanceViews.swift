@@ -337,6 +337,25 @@ struct GlancePopover: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(runawayFooterAccessibilityLabel)
                 .help("Runaway Usage Notice: click to inspect")
+            } else if model.isShareFeedStale {
+                Button {
+                    openConsole(.settingsSourcesFleet)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                            .font(.system(size: 13, weight: .bold))
+                        Text("Sharing Stale")
+                            .font(.system(size: 14, weight: .heavy, design: .rounded))
+                    }
+                    .foregroundStyle(Theme.warning)
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.warning.opacity(0.35), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .help(model.shareFeedStaleHelp)
+                .accessibilityLabel("iPhone sharing stale: click for Sync settings")
             } else {
                 Spacer()
             }

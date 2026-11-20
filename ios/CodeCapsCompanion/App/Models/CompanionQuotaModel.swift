@@ -378,10 +378,21 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable, Sendable {
     /// alarm decision; it only dates the reading.
     public func staleReadingCue(now: Date = Date()) -> String? {
         guard !isMasked else { return nil }
-        return QuotaStalenessRule.cue(observedAt: reportedAt,
-                                      resetAt: resetAt,
-                                      now: now,
-                                      isAtCap: isExhausted)
+        if let cue = QuotaStalenessRule.cue(observedAt: reportedAt,
+                                            resetAt: resetAt,
+                                            now: now,
+                                            isAtCap: isExhausted) {
+            return cue
+        }
+        // Only an UNDATED reading falls through here: a dated one that cue
+        // passed is fresh or its period ended, and both keep the silence the
+        // shared rule chose.  A reading the feed never dated must not pass as
+        // current - silence is what a fresh bar looks like, and this row's
+        // number has no age to trust (owner, Nov-15-2026 stale-feed
+        // screenshot).
+        guard reportedAt == nil else { return nil }
+        return QuotaStalenessRule.undatedCue(hasReading: remainingPercent != nil
+            || absoluteRemaining != nil || absoluteLimit != nil)
     }
 
     /// The caption a meter or window row leads with:  the cadence, plus the
@@ -918,12 +929,15 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// rule's at-cap branch), but an old timestamp means the reading has not
     /// been re-confirmed, and the line must not pass as a fresh confirmation
     /// (QA pixel review 2026-11-06: fully-at-cap card showed cap and reset
-    /// with no timestamp).  Nil when the reading is recent or the feed never
-    /// dated it, which is unverified rather than old.  This only dates the
+    /// with no timestamp).  Nil when the reading is recent; a reading the
+    /// feed never dated says its age is unknown rather than passing silently,
+    /// which is the same honesty the meters show.  This only dates the
     /// reading; it changes no cap, quota or alarm decision.
     public func atCapReadingAgeCue(scope: CompanionSourceScope = .allSources, now: Date = Date()) -> String? {
-        guard let window = atCapWindow(scope: scope, now: now),
-              let reportedAt = window.reportedAt else { return nil }
+        guard let window = atCapWindow(scope: scope, now: now) else { return nil }
+        guard let reportedAt = window.reportedAt else {
+            return QuotaStalenessRule.undatedCue(hasReading: true)
+        }
         guard !QuotaFreshnessRule.isReadingRecent(observedAt: reportedAt, now: now) else { return nil }
         return "updated \(UpdatedStamp.label(reportedAt, now: now))"
     }
