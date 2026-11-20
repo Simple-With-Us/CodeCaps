@@ -33,7 +33,7 @@ struct SettingsMenuBarPage: View {
             } footer: {
                 Text("Both keeps the menu bar icon and a Dock icon." + sentenceGap
                      + "Dock hides the menu bar icon, so use the Dashboard to reach your quota.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -75,7 +75,7 @@ struct SettingsMenuBarPage: View {
                 }
 
                 Text(model.menuBarQuotaDescription(for: model.menuBarQuotaSelection))
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -87,7 +87,7 @@ struct SettingsMenuBarPage: View {
             } footer: {
                 Text("Match Provider follows each platform's Logo Style." + sentenceGap
                      + "Light/Dark and Colour override it for the menu bar only, leaving the Docked Bar and sidebar on whatever you set on Logo Style.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -106,7 +106,7 @@ struct SettingsMenuBarPage: View {
                         }
                         if model.menuBarStyle != .symbolOnly {
                             Text(model.menuBarTitle.isEmpty ? "—" : model.menuBarTitle)
-                                .font(.system(size: 13, weight: .medium).monospacedDigit())
+                                .font(.subheadline.weight(.medium).monospacedDigit())
                         }
                     }
                     .accessibilityElement(children: .combine)
@@ -115,7 +115,7 @@ struct SettingsMenuBarPage: View {
                     Text("Preview")
                 }
                 Text("This is what appears in your menu bar.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -156,7 +156,7 @@ struct SettingsMenuBarPage: View {
                         .accessibilityLabel("PiP background")
 
                         Text(model.pipBackground.detail)
-                            .font(.system(size: 11))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
 
                         // Owner 2026-10-28: the name is the first thing the
@@ -167,10 +167,10 @@ struct SettingsMenuBarPage: View {
                             .accessibilityLabel("Show Provider Names In PiP")
 
                         Text("Pinned Quotas (Default: Lowest 2 Remaining)")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         Text("Drag to reorder options." + sentenceGap + "Pinned quotas appear in the PiP widget in this order.")
-                            .font(.system(size: 11))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
 
                         PipOptionsReorderList(model: model)
@@ -181,7 +181,7 @@ struct SettingsMenuBarPage: View {
                 Eyebrow("Picture-in-Picture (PiP)")
             } footer: {
                 Text("A tiny on-screen HUD stays on top of all windows so you are aware of critical quotas in real time.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -280,7 +280,7 @@ struct SettingsPlatformsPage: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Drag to reorder." + sentenceGap
                  + "This order is used in the quota list and in the Docked Bar.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -296,7 +296,7 @@ struct SettingsPlatformsPage: View {
                             .accessibilityHidden(true)
                         PlatformLogo(providerKey: providerKey, size: 16,
                                      style: model.markStyle(for: providerKey))
-                        Text(label(for: providerKey)).font(.system(size: 13, weight: .medium))
+                        Text(label(for: providerKey)).font(.subheadline.weight(.medium))
                         Spacer()
                     }
                     .tag(providerKey)
@@ -431,14 +431,14 @@ struct SettingsSourcesFleetPage: View {
                     .foregroundStyle(Color.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Machine Identity: \(QuotaPublisher.machineName)")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.callout.weight(.semibold))
                     Text("Host: \(ProcessInfo.processInfo.hostName)")
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Text("Identified")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.caption2.weight(.medium))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color.secondary.opacity(0.14), in: Capsule())
@@ -488,7 +488,7 @@ struct SettingsSourcesFleetPage: View {
                     Text(handoffError).foregroundStyle(Theme.warning)
                 }
             }
-            .font(.system(size: 11))
+            .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -507,10 +507,10 @@ struct SettingsSourcesFleetPage: View {
                 PlatformLogo(providerKey: reader.providerKey, size: 16,
                              style: model.markStyle(for: reader.providerKey))
                 Text(section?.providerLabel ?? reader.label)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .frame(width: 110, alignment: .leading)
                 Text(reader.source)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 if let readerID = reader.optionalReaderID {
@@ -531,7 +531,7 @@ struct SettingsSourcesFleetPage: View {
             }
             if !optionalEnabled {
                 Text("Quota reads are off for this provider.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let issue {
