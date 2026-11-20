@@ -955,8 +955,9 @@ struct PipWidgetView: View {
     /// is the normal all-rows HUD.
     @State private var detailRowId: String?
 
-    init(model: MonitorModel, opensDetailRowId: String? = nil) {
+    init(model: MonitorModel, panel: NSPanel? = nil, opensDetailRowId: String? = nil) {
         self.model = model
+        self.panel = panel
         self.opensDetailRowId = opensDetailRowId
         _detailRowId = State(initialValue: opensDetailRowId)
     }
