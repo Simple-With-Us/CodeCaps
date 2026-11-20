@@ -15,6 +15,7 @@ name: Sentry CI Report
 # Cron schedules mirrored for the check-in step (must match the source
 # workflow's `schedule:` block; keep in sync if those change):
 #   iOS TestFlight ship (GitHub-hosted macOS) -> "26,56 * * * *" (ios-ship.yml)
+#   Auto-merge PRs -> "*/15 * * * *" (auto-merge-prs.yml, fleet sweep)
 
 on:
   workflow_run:
@@ -28,6 +29,7 @@ on:
       - PR Autofix
       - Secret scanning
       - Swift CI
+      - Auto-merge PRs
     types: [requested, completed]
 
 permissions:

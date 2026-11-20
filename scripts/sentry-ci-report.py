@@ -90,6 +90,8 @@ APP = "codecaps"
 
 CRON_SCHEDULES = {
     "iOS TestFlight ship (GitHub-hosted macOS)": "26,56 * * * *",
+    # auto-merge-prs.yml: fleet auto-merge sweep (15 min).
+    "Auto-merge PRs": "*/15 * * * *",
 }
 _CRON_SCHEDULES_FOLDED = {name.casefold(): expr for name, expr in CRON_SCHEDULES.items()}
 
