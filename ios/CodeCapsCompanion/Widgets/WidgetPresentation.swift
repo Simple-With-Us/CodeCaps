@@ -932,7 +932,7 @@ public enum WidgetPresentation {
                 break
             }
             switch base {
-            case "general", "minimax:general", "minimax:coding-plan", "coding-plan":
+            case "general", "minimax:general", "minimax:coding-plan", "coding-plan", "plan":
                 return "minimax:plan"
             default:
                 return base.isEmpty || base == candidate ? series : base
