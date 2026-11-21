@@ -3193,7 +3193,16 @@ final class MonitorModel: ObservableObject {
         // Fleet-fallback windows already sit in `merged`, and the caller also
         // appends every fleet group.  The widget cache stores this array
         // verbatim, so an equal window is published once.
-        let unique = Self.uniqueWindows(publishable)
+        var seen = Set<QuotaWindow>()
+        let unique = publishable.filter { window in
+            // The pool annotates a participant before the raw fleet copy is
+            // appended.  That provenance annotation does not create another
+            // reading: merge only otherwise-identical copies and retain the
+            // first (pool-projected) window with its provenance intact.
+            var readingIdentity = window
+            readingIdentity.sharedPoolOrigin = nil
+            return seen.insert(readingIdentity).inserted
+        }
         let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: unique)
             .platformSections(now: now).map(\.providerKey))
         let windows = exportedWindows(unique, locallyProduced: false).filter {
