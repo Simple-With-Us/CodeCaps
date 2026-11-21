@@ -1989,7 +1989,7 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     @discardableResult
-    private func parseSnapshot(data: Data) -> Bool {
+    func parseSnapshot(data: Data) -> Bool {
         guard let envelope = try? JSONDecoder().decode(WireEnvelope.self, from: data),
               let rawWindows = envelope.windows else { return false }
         // The payload names the installation that wrote it, so the phone can
@@ -2295,7 +2295,17 @@ public final class CompanionQuotaModel: ObservableObject {
         for w in liveWindows {
             let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
             let parsedReportedAt = Self.reportedAt(from: w)
-            let cadence = Self.formatCadence(w.label, window: w.window, resetAt: parsedReset)
+            let effectiveWindowToken = QuotaWindowVocabulary.authoritativeWindowToken(
+                providerKey: providerKey,
+                id: w.id,
+                modelId: [w.modelId, w.modelType].compactMap {
+                    $0?.trimmingCharacters(in: .whitespacesAndNewlines)
+                }.first { !$0.isEmpty },
+                label: w.label,
+                windowToken: w.window,
+                windowKey: w.windowKey
+            )
+            let cadence = Self.formatCadence(w.label, window: effectiveWindowToken, resetAt: parsedReset)
             let displayLabel = reading(w).displayLabel
             let pct = reading(w).remainingPercent
             // A reading decides, as it does on every surface:  the export never
@@ -2333,7 +2343,12 @@ public final class CompanionQuotaModel: ObservableObject {
             let wireCadence = (w.windowKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let allowanceKey = (isVideoWire ? "video|" : "plan|")
                 + Self.normalizedAllowanceSeries(providerKey: providerKey, series: Self.allowanceSeries(forWireId: w.id))
-                + "|" + Self.canonicalWireCadence(wireCadence: wireCadence, windowToken: w.window, label: w.label, resetAt: parsedReset)
+                + "|" + Self.canonicalWireCadence(
+                    wireCadence: effectiveWindowToken == w.window ? wireCadence : "",
+                    windowToken: effectiveWindowToken,
+                    label: w.label,
+                    resetAt: parsedReset
+                )
             let cadenceKey = effectiveQualifier.isEmpty
                 ? allowanceKey
                 : "\(effectiveQualifier):\(allowanceKey)"
@@ -2377,7 +2392,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 reportedAt: parsedReportedAt,
                 normalizedWindowKey: cadenceKey,
                 producerInstanceId: w.producerInstanceId,
-                rawWindowToken: w.window,
+                rawWindowToken: effectiveWindowToken,
                 // The same question the Mac asks, with the reader's own
                 // label, model type and model id:  that is where the "fable"
                 // and "argon" signals live, not in the display label.

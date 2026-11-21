@@ -237,6 +237,88 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
         XCTAssertTrue(model.hasActiveRunawayAnomaly(for: claudeRow))
     }
 
+    func testSharedSubscriptionPoolRunawayFlameMatchesSameAllowanceOnly() {
+        let now = Date()
+        let model = makeModel()
+        let observedAt = ISO8601DateFormatter().string(from: now)
+        let resetAt = ISO8601DateFormatter().string(from: now.addingTimeInterval(3_600))
+        var cursorWindow = QuotaWindow(
+            id: UnifiedSubscriptionPool.canonicalWindowId(for: "cursor"),
+            provider: "Cursor", providerKey: "cursor", label: "Included plan",
+            remainingPercent: 40, resetAt: resetAt, window: "7d", occurredAt: observedAt,
+            source: "cursor-reader", accountKey: "cursor-account")
+        cursorWindow.sourceApp = "local-mac"
+        let poolWindows = UnifiedSubscriptionPool.participantKeys.map { key -> QuotaWindow in
+            var window = key == "cursor" ? cursorWindow : UnifiedSubscriptionPool.adapt(cursorWindow, for: key)
+            if key == "grok" {
+                window.window = "1w"
+                window.remainingPercent = 39.9
+                window.source = "independent-grok-reader"
+                window.sharedPoolOrigin = nil
+            }
+            return window
+        }
+        let apiWindow = QuotaWindow(id: "xai:api-monthly", provider: "xAI", providerKey: "xai",
+                                   label: "API credits", remainingPercent: 40, resetAt: resetAt,
+                                   window: "30d", occurredAt: observedAt, source: "xai-api")
+        let independentWindow = QuotaWindow(id: "anthropic:5h", provider: "Claude", providerKey: "anthropic",
+                                            label: "Claude 5h", remainingPercent: 40, resetAt: resetAt,
+                                            window: "5h", occurredAt: observedAt, source: "claude-reader")
+        let windows = poolWindows + [apiWindow, independentWindow]
+        let sections = Dictionary(grouping: windows, by: \.canonicalProviderKey).map { key, providerWindows in
+            QuotaPlatformSection(providerKey: key, providerLabel: key, via: nil, expected: true,
+                                 windows: providerWindows.map { QuotaWindowSnapshot(window: $0, now: now) })
+        }
+        model.injectForTests(sections: sections, now: now)
+        model.injectLocalHistorySourceForTests([cursorWindow])
+        let rows = Dictionary(uniqueKeysWithValues: model.displaySections.map { ($0.providerKey, $0) })
+        model.injectRunawayAnomaliesForTests([
+            .init(providerKey: "cursor", windowId: cursorWindow.id,
+                  kind: .vsBaseline, multiplier: 3.7, summary: "Spending fast")
+        ])
+
+        for key in UnifiedSubscriptionPool.participantKeys {
+            XCTAssertTrue(model.hasActiveRunawayAnomaly(for: rows[key]!), "missing shared-pool flame for \(key)")
+        }
+        XCTAssertFalse(model.hasActiveRunawayAnomaly(for: rows["anthropic"]!))
+
+        model.injectRunawayAnomaliesForTests([
+            .init(providerKey: "xai", windowId: apiWindow.id,
+                  kind: .vsBaseline, multiplier: 3.7, summary: "Spending fast")
+        ])
+        for key in ["cursor", "grok", "grok-bot"] {
+            XCTAssertFalse(model.hasActiveRunawayAnomaly(for: rows[key]!),
+                           "an independent xAI API anomaly must not fan out to \(key)")
+        }
+
+        var unknownAccount = UnifiedSubscriptionPool.adapt(cursorWindow, for: "grok")
+        unknownAccount.accountKey = nil
+        let unknownAccountSection = QuotaPlatformSection(providerKey: "grok", providerLabel: "Grok", via: nil,
+                                                         expected: true,
+                                                         windows: [QuotaWindowSnapshot(window: unknownAccount, now: now)])
+        let unknownAccountRow = DisplaySection.rows(for: unknownAccountSection, now: now)[0]
+
+        var differentAllowance = UnifiedSubscriptionPool.adapt(cursorWindow, for: "grok")
+        differentAllowance.accountKey = "another-account"
+        let differentSection = QuotaPlatformSection(providerKey: "grok", providerLabel: "Grok", via: nil,
+                                                    expected: true,
+                                                    windows: [QuotaWindowSnapshot(window: differentAllowance, now: now)])
+        let differentRow = DisplaySection.rows(for: differentSection, now: now)[0]
+        model.injectRunawayAnomaliesForTests([
+            .init(providerKey: "cursor", windowId: cursorWindow.id,
+                  kind: .vsBaseline, multiplier: 3.7, summary: "Spending fast")
+        ])
+        XCTAssertFalse(model.hasActiveRunawayAnomaly(for: differentRow),
+                       "a participant with a different account is not the same allowance")
+        XCTAssertTrue(model.hasActiveRunawayAnomaly(for: unknownAccountRow),
+                      "an unknown participant account does not conflict with the known source account")
+        differentAllowance.accountKey = cursorWindow.accountKey
+        differentAllowance.resetAt = ISO8601DateFormatter().string(from: now.addingTimeInterval(7_200))
+        let otherPeriod = QuotaPlatformSection(providerKey: "grok", providerLabel: "Grok", via: nil,
+            expected: true, windows: [QuotaWindowSnapshot(window: differentAllowance, now: now)])
+        XCTAssertFalse(model.hasActiveRunawayAnomaly(for: DisplaySection.rows(for: otherPeriod, now: now)[0]))
+    }
+
     private func makeModel() -> MonitorModel {
         let model = MonitorModel(defaults: defaults, burnRateHistoryURL: historyURL)
         model.skipsSnapshotIOForTesting = true

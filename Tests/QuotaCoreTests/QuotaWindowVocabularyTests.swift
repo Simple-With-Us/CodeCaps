@@ -2,6 +2,30 @@ import XCTest
 @testable import QuotaCore
 
 final class QuotaWindowVocabularyTests: XCTestCase {
+    func testMiniMaxLegacyDailyCadenceRequiresTheCodingAllowanceIdentity() {
+        for token in ["1d", "24h", "daily", "1-day"] {
+            XCTAssertEqual(QuotaWindowVocabulary.authoritativeWindowToken(
+                providerKey: "minimax", id: "opaque-series", modelId: "general",
+                label: "general (interval window)", windowToken: token), "5-hour")
+        }
+        let preserved: [(String, String?, String)] = [
+            ("minimax:general:weekly", "general", "general weekly"),
+            ("minimax:video:interval", "video", "general quota"),
+            ("minimax:general:interval", "MiniMax-M2", "general quota"),
+            ("minimax:notgeneral:interval", nil, "general quota"),
+            ("minimax:plan", nil, "USD plan"),
+            ("minimax:general:interval", "general", "video allowance")
+        ]
+        for (id, model, label) in preserved {
+            XCTAssertEqual(QuotaWindowVocabulary.authoritativeWindowToken(
+                providerKey: "minimax", id: id, modelId: model,
+                label: label, windowToken: "1d"), "1d", id)
+        }
+        XCTAssertEqual(QuotaWindowVocabulary.authoritativeWindowToken(
+            providerKey: "anthropic", id: "general", modelId: "general",
+            label: "general", windowToken: "1d"), "1d")
+    }
+
     func testStandardCadenceFromTokens() {
         XCTAssertEqual(QuotaWindowVocabulary.standardCadence(windowToken: "5h", label: ""), "5-hour")
         XCTAssertEqual(QuotaWindowVocabulary.standardCadence(windowToken: "7d", label: ""), "7-day")
