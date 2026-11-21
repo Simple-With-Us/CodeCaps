@@ -503,7 +503,7 @@ final class CompanionModelTests: XCTestCase {
             "video windows must partition out of plan identity before dedupe"
         )
         XCTAssertTrue(
-            source.contains(#"providerKey == "xai", series == "grok:subscription""#),
+            source.contains(#"providerKey == "xai", series.lowercased() == "grok:subscription""#),
             "the bounded xAI subscription-pool alias must exist (qa4 wire capture)"
         )
         XCTAssertTrue(
