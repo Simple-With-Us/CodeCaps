@@ -2,6 +2,18 @@ import XCTest
 @testable import QuotaCore
 
 final class UnifiedSubscriptionPoolTests: XCTestCase {
+    func testEquallyFreshNativeParticipantRowsSurviveResponseDeduplication() {
+        let grok = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 89)
+        let xai = makeWindow(providerKey: "xai", id: "grok:subscription", rem: 89)
+        let shared = UnifiedSubscriptionPool.share(windows: [grok, xai], now: now,
+            targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let sections = QuotaResponse(generatedAt: "", windows: shared).platformSections(now: now)
+        for provider in UnifiedSubscriptionPool.participantKeys {
+            XCTAssertEqual(sections.first { $0.providerKey == provider }?.windows.first?.remainingPercent, 89,
+                "an equally fresh native reading must not disappear from the participant row")
+        }
+    }
+
     private let iso = ISO8601DateFormatter()
     private let now = Date()
 
