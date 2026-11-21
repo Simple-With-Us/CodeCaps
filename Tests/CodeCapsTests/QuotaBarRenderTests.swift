@@ -58,7 +58,7 @@ final class QuotaBarRenderTests: XCTestCase {
             poolKey: nil,
             remainingPercent: windows.compactMap(\.remainingPercent).min(),
             resetAt: windows.compactMap(\.resetAt).min(),
-            maskedWindowIds: [])
+            maskedWindowIds: [], drivingWindowId: nil)
     }
 
     // MARK: Gallery

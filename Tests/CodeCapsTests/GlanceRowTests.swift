@@ -327,7 +327,7 @@ final class GlanceExpandedLineTests: XCTestCase {
             platformTitle: "Antigravity",
             section: QuotaPlatformSection(providerKey: "google-antigravity", providerLabel: "Antigravity",
                                           via: nil, expected: true, windows: windows),
-            poolKey: "gemini", remainingPercent: 0, resetAt: nil, maskedWindowIds: ["5h"])
+            poolKey: "gemini", remainingPercent: 0, resetAt: nil, maskedWindowIds: ["5h"], drivingWindowId: nil)
         XCTAssertTrue(glanceExpandedLines(for: masked, now: now).isEmpty)
     }
 
@@ -346,7 +346,7 @@ final class GlanceExpandedLineTests: XCTestCase {
                                             QuotaWindowSnapshot(window: geminiWeekly, now: now),
                                             QuotaWindowSnapshot(window: argonWindow, now: now),
                                           ]),
-            poolKey: "gemini", remainingPercent: 76, resetAt: now.addingTimeInterval(6 * 86_400), maskedWindowIds: [])
+            poolKey: "gemini", remainingPercent: 76, resetAt: now.addingTimeInterval(6 * 86_400), maskedWindowIds: [], drivingWindowId: nil)
 
         XCTAssertFalse(geminiRow.isAtCap, "Gemini row must not be marked at cap because Argon is at 0%")
         let pair = glanceMeterPair(for: geminiRow, now: now)
@@ -454,7 +454,7 @@ final class GlanceMeterTests: XCTestCase {
             poolKey: nil,
             remainingPercent: 10,
             resetAt: now.addingTimeInterval(86_400),
-            maskedWindowIds: [])
+            maskedWindowIds: [], drivingWindowId: nil)
     }
 
     func testMuseExtraBalanceRemainsUsableWhenWeeklyIsSpent() {
@@ -492,7 +492,7 @@ final class GlanceMeterTests: XCTestCase {
             poolKey: nil,
             remainingPercent: 11,
             resetAt: now.addingTimeInterval(4 * 86_400),
-            maskedWindowIds: [])
+            maskedWindowIds: [], drivingWindowId: nil)
         let pair = glanceMeterPair(for: row, now: now)
         XCTAssertEqual(pair.short?.window.id, "session")
         XCTAssertEqual(pair.long?.window.id, "weekly")
@@ -521,7 +521,7 @@ final class GlanceMeterTests: XCTestCase {
             poolKey: nil,
             remainingPercent: windows.compactMap(\.remainingPercent).min(),
             resetAt: windows.compactMap(\.resetAt).min(),
-            maskedWindowIds: masked)
+            maskedWindowIds: masked, drivingWindowId: nil)
     }
 
     // MARK: Layout
@@ -673,7 +673,7 @@ final class GlanceMeterTests: XCTestCase {
             section: QuotaPlatformSection(providerKey: "grok-bot", providerLabel: "Grok Bot", via: "cursor",
                                           expected: true, windows: windows),
             poolKey: nil, remainingPercent: windows.compactMap(\.remainingPercent).min(),
-            resetAt: windows.compactMap(\.resetAt).min(), maskedWindowIds: [])
+            resetAt: windows.compactMap(\.resetAt).min(), maskedWindowIds: [], drivingWindowId: nil)
     }
 
     func testAPlaceholderBesideAReadingIsNotDrawnAsAnEmptySecondBar() {
@@ -1151,7 +1151,7 @@ final class GlanceMeterTests: XCTestCase {
             poolKey: nil,
             remainingPercent: windows.compactMap(\.remainingPercent).min(),
             resetAt: windows.compactMap(\.resetAt).min(),
-            maskedWindowIds: [])
+            maskedWindowIds: [], drivingWindowId: nil)
     }
 
     /// Cursor has only the seven-day pool quota now, so its row reads like
@@ -1225,6 +1225,6 @@ final class GlanceMeterTests: XCTestCase {
             poolKey: "gemini",
             remainingPercent: windows.compactMap(\.remainingPercent).min(),
             resetAt: nil,
-            maskedWindowIds: masked)
+            maskedWindowIds: masked, drivingWindowId: nil)
     }
 }
