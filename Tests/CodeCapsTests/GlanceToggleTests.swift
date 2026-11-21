@@ -338,6 +338,16 @@ final class GlanceToggleTests: XCTestCase {
         return ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
 
+    /// The switch sizes its boxes from the rendered label, so this ruler has
+    /// to be a rendered width too:  AppKit string measurement runs wider than
+    /// SwiftUI's typesetter for the same nominal font (about 5pt on the widest
+    /// title at 11pt semibold), which made the switch assertion compare two
+    /// different instruments.
+    private func renderedWidth(_ text: String) -> CGFloat {
+        NSHostingView(rootView: Text(text).font(.system(size: 11, weight: .semibold)).fixedSize())
+            .fittingSize.width
+    }
+
     func testOneHundredPercentLeavesARealGapBeforeTheCountdown() {
         let gap = Metrics.glanceMeterPercentWidth - width("100%", monospacedDigits: true)
         XCTAssertGreaterThanOrEqual(gap, 10, "\"100%\" and the countdown must never touch again")
@@ -448,7 +458,7 @@ final class GlanceToggleTests: XCTestCase {
     }
 
     func testTheSwitchIsTwoEqualBoxesInTitleCase() {
-        let widest = GlanceViewMode.allCases.map { width($0.title, size: 11, weight: .semibold) }.max() ?? 0
+        let widest = GlanceViewMode.allCases.map { renderedWidth($0.title) }.max() ?? 0
         let box = widest + 2 * Metrics.glanceHeaderSegmentPadding
         let host = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac), model: model))
         XCTAssertEqual(host.fittingSize.width, 2 * box + 1, accuracy: 2, "two equal boxes and the hairline between")
