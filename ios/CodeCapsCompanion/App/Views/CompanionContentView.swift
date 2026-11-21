@@ -969,6 +969,7 @@ public struct CompanionQuotaRow: View {
                     Text(cap).font(.caption2).foregroundStyle(CompanionTheme.supporting)
                     CompanionMeterView(caption: extra.caption, window: extra)
                 }
+                .accessibilityElement(children: .combine)
             } else {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(cap)
