@@ -1071,7 +1071,7 @@ public struct CompanionMeterView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(caption), \(window.displayPercent) remaining, resets in \(window.meterCountdown())")
+        .accessibilityLabel("\(caption), \(window.displayPercent) remaining, resets in \(window.meterCountdown())\(window.staleReadingCue().map { ", \($0)" } ?? "")")
     }
 }
 
