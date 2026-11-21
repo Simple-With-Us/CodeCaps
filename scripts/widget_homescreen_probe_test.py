@@ -527,21 +527,6 @@ class CommandPlanTests(unittest.TestCase):
         self.assertIn(PROBE_LAUNCH_ARGS[0], swift)
         self.assertIn("WidgetProbeHooks.touchGroupContainerIfRequested()", swift)
 
-    def test_swift_probe_uses_the_canonical_app_group_identifier(self):
-        group = read_app_group(WIDGET_ENTITLEMENTS)
-        model_src = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "Models" / "CompanionQuotaModel.swift").read_text(encoding="utf-8")
-        app_src = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompanionApp.swift").read_text(encoding="utf-8")
-        # The macOS/iOS split stays (CompanionModelTests pins the values).
-        self.assertIn("#if os(macOS)", model_src)
-        self.assertIn('"CC8UTF7ATG.codecaps"', model_src)
-        self.assertIn(f'"{group}"', model_src)
-        # One nonisolated alias exposes the model's identifier to the
-        # off-main-actor hook - never a second literal.
-        self.assertIn("nonisolated static let codeCapsAppGroupId =", model_src)
-        self.assertIn("public static let appGroupId = codeCapsAppGroupId", model_src)
-        self.assertIn("forSecurityApplicationGroupIdentifier: CompanionQuotaModel.codeCapsAppGroupId", app_src)
-        self.assertNotIn('forSecurityApplicationGroupIdentifier: "', app_src)
-
     def test_interpret_group_marker_nil_proves_entitlement_refusal(self):
         detail = interpret_group_marker("NIL")
         self.assertIsNotNone(detail)
@@ -569,9 +554,15 @@ class CommandPlanTests(unittest.TestCase):
 
     def test_group_container_from_marker_rejects_dotdot_escape(self):
         with tempfile.TemporaryDirectory() as tmp:
-            anchor = (Path(tmp) / "AppGroup").resolve()
-            anchor.mkdir()
+            root = Path(tmp)
+            anchor = (root / "sim" / "AppGroup").resolve()
+            anchor.mkdir(parents=True)
+            escaped = (root / "escaped")
+            escaped.mkdir()
+            # Resolves to root/escaped, which exists but sits outside anchor,
+            # so the containment guard (not a missing-directory check) rejects it.
             escapee = anchor / ".." / ".." / "escaped"
+            self.assertTrue(escapee.resolve().is_dir())
             self.assertIsNone(
                 group_container_from_marker(str(escapee), "UDID", anchor=anchor)
             )

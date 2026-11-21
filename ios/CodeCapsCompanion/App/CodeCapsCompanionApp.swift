@@ -30,7 +30,9 @@ enum WidgetProbeHooks {
     static func touchGroupContainerIfRequested() {
         guard ProcessInfo.processInfo.arguments.contains("-CCWidgetProbeTouchGroupContainer") else { return }
         let fm = FileManager.default
-        // Same identifier as the model, via its nonisolated alias (kody).
+        // codeCapsAppGroupId is the nonisolated platform-conditional identifier;
+        // appGroupId stays MainActor-isolated.  The iOS DEBUG hook must use
+        // the same iOS value the model uses, without a second literal.
         let resolved = fm.containerURL(forSecurityApplicationGroupIdentifier: CompanionQuotaModel.codeCapsAppGroupId)
         let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
