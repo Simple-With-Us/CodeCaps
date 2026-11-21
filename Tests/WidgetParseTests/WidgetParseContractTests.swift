@@ -348,28 +348,39 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertTrue(q6c.isExhausted)
     }
 
-    /// CC-223:  MiniMax's daily interval and weekly plan window both reach
-    /// the widget pair, and the supplementary video daily must not displace
-    /// the weekly coding window.
-    func testCC223MiniMaxDailyAndWeeklyPair() throws {
-        let iso = ISO8601DateFormatter()
-        let stamp = iso.string(from: Date())
-        let resetDaily = iso.string(from: Date().addingTimeInterval(20 * 3600))
-        let resetWeekly = iso.string(from: Date().addingTimeInterval(5 * 86_400))
-        let payload = [
-            wire("mm:general:interval", "minimax", "1d", 82, "general (interval window)", stamp: stamp, reset: resetDaily),
-            wire("mm:general:weekly", "minimax", "7d", 54, "general (1w window)", stamp: stamp, reset: resetWeekly),
-            wire("mm:video:interval", "minimax", "1d", 100, "video (1d window)", model: "video", stamp: stamp, reset: resetDaily),
-        ]
+    /// A legacy/synced MiniMax `general` interval can carry a false `1d`
+    /// cadence even though the provider's coding interval is five hours.
+    /// Normalize that one identity in the actual widget parse path, retain
+    /// the weekly plan window, and leave both video and unrelated daily quotas
+    /// at one day.
+    func testMiniMaxGeneralDailyAliasNormalizesOnlyCodingInterval() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-11-14T21:44:00Z")!
+        let snapshot = try Data(contentsOf: packageRoot.appendingPathComponent(
+            "Tests/Fixtures/minimax-legacy-interval-daily.json"))
         let parsed = WidgetPresentation.parseSnapshot(
-            data: try JSONSerialization.data(withJSONObject: ["windows": payload]))
+            data: snapshot, now: now)
         let minimax = try XCTUnwrap(parsed.first { $0.providerKey == "minimax" })
-        XCTAssertEqual(minimax.primaryWindows.count, 2)
-        XCTAssertEqual(minimax.primaryWindows.map(\.cadenceToken), ["1d", "7d"])
+        XCTAssertEqual(minimax.primaryWindows.count, 3)
+        XCTAssertEqual(minimax.primaryWindows.map(\.cadenceToken), ["5h", "1d", "7d"])
         let pair = try XCTUnwrap(minimax.dualWindows())
-        XCTAssertEqual(pair.window1.cadenceToken, "1d")
+        XCTAssertEqual(pair.window1.cadenceToken, "5h")
         XCTAssertEqual(pair.window2.cadenceToken, "7d")
-        XCTAssertFalse(minimax.primaryWindows.contains(where: \.isSupplementaryVideoQuota))
+        let video = try XCTUnwrap(minimax.windows.first(where: \.isSupplementaryVideoQuota))
+        XCTAssertEqual(video.cadenceToken, "1d")
+        XCTAssertEqual(minimax.primaryWindows.first(where: { $0.id == "mm:MiniMax-M2:daily" })?.cadenceToken, "1d")
+        XCTAssertEqual(try XCTUnwrap(parsed.first { $0.providerKey == "anthropic" }?.primaryWindows.first).cadenceToken, "1d")
+    }
+
+    func testMiniMaxCodingModelTypeSurvivesAnEmptyModelIdAlias() throws {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        var row = wire("mm:opaque:interval", "minimax", "1d", 82, "Coding allowance",
+                       model: " ", stamp: iso.string(from: now),
+                       reset: iso.string(from: now.addingTimeInterval(4 * 3600)))
+        row["modelType"] = "general"
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": [row]]), now: now)
+        XCTAssertEqual(parsed.first { $0.providerKey == "minimax" }?.primaryWindows.first?.cadenceToken, "5h")
     }
 
     /// The 2026-11-14 report, in the shapes producers emit now:  the Mac

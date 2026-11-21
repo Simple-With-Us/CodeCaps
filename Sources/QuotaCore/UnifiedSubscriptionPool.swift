@@ -264,7 +264,13 @@ public enum UnifiedSubscriptionPool {
                     // pool's windows are weekly by identity, and a copy of this
                     // window that carried a different token would be a second
                     // window in the widget's cache rather than the same one.
-                    result.append(window)
+                    // This is now an explicit participant row, even when
+                    // it kept its own equally fresh reading.  Tag its own
+                    // provenance so response deduplication cannot remove it
+                    // as a second collector report of Grok/xAI's one pool.
+                    var current = window
+                    current.sharedPoolOrigin = poolOrigin(of: window)
+                    result.append(current)
                 } else {
                     // Update this window with the fresher reading from best
                     var updated = window

@@ -64,8 +64,8 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(source.contains("return CardHeadline.percent(readings)"))
         XCTAssertTrue(source.contains("windowToken: window.rawWindowToken,"),
                       "the headline must pass the producer's own token, not a formatted cadence")
-        XCTAssertTrue(source.contains("rawWindowToken: w.window"),
-                      "the window item must carry the producer's raw token")
+        XCTAssertTrue(source.contains("rawWindowToken: effectiveWindowToken"),
+                      "the window item must carry the shared authoritative token")
         XCTAssertFalse(source.contains("windowToken: nil, label: left.label"),
                        "the muse sort must pass the producer's raw token")
         XCTAssertFalse(source.contains("windowToken: nil,\n                    label: $0.window.label"),
@@ -438,11 +438,11 @@ final class CompanionModelTests: XCTestCase {
     func testTheCompanionCardShowsTheAtCapLine() throws {
         let view = try readCompanionContentViewSource()
         XCTAssertTrue(
-            view.contains("item.atCapSummary(scope: scope)"),
+            view.contains("item.atCapSummary(scope: .allSources)"),
             "the quota card must show the cap line"
         )
         XCTAssertTrue(
-            view.contains("At cap. \\(atCapSummary)"),
+            view.contains(".accessibilityElement(children: .combine)"),
             "the cap line must be announced to VoiceOver"
         )
     }
@@ -465,7 +465,7 @@ final class CompanionModelTests: XCTestCase {
     func testTheCompanionCardDatesAnOldCapReading() throws {
         let view = try readCompanionContentViewSource()
         XCTAssertTrue(
-            view.contains("item.atCapReadingAgeCue(scope: scope)"),
+            view.contains("item.atCapReadingAgeCue(scope: .allSources)"),
             "the at-cap layout must render the reading's age when it is old"
         )
         let source = try readCompanionModelSource()

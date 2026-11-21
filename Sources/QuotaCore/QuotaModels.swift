@@ -835,10 +835,28 @@ public extension QuotaResponse {
                 .split(separator: ":")
                 .last == "subscription"
         }
-        guard let grokIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "grok" }),
-              let xaiIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "xai" })
+        // The fleet's filing of the Grok credits payload under the xAI key
+        // (bucket `grok:subscription`) is the xAI row's own live reading:
+        // this Mac reads no xAI quota itself.  It drops a staler local grok
+        // duplicate, but a local grok reading that is as fresh or fresher
+        // never drops it, or the xAI row is left with no reading at all a
+        // minute after the refresh filled it (FleetRowSourceTests, owner
+        // 2026-10-23).  The fleet's live reading wins over the file poll.
+        func isFleetGrokFiling(_ window: QuotaWindow) -> Bool {
+            guard window.canonicalProviderKey == "xai" else { return false }
+            let parts = UnifiedSubscriptionPool.bucketId(of: window.id).split(separator: ":")
+            return parts.count >= 2
+                && parts[parts.count - 2] == "grok"
+                && parts[parts.count - 1] == "subscription"
+        }
+        guard let grokIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "grok" })
         else { return windows }
         let grokDate = windows[grokIndex].occurredDate ?? .distantPast
+        guard let xaiIndex = windows.firstIndex(where: {
+            isPool($0) && $0.canonicalProviderKey == "xai"
+                && !(isFleetGrokFiling($0) && ($0.occurredDate ?? .distantPast) <= grokDate)
+        })
+        else { return windows }
         let xaiDate = windows[xaiIndex].occurredDate ?? .distantPast
         var copy = windows
         copy.remove(at: grokDate >= xaiDate ? xaiIndex : grokIndex)

@@ -1,0 +1,72 @@
+{
+  "windows": [
+    {
+      "id": "mm:general:interval",
+      "provider": "minimax",
+      "providerKey": "minimax",
+      "label": "general (interval window)",
+      "window": "1d",
+      "windowKey": "1d",
+      "modelId": "general",
+      "modelType": "general",
+      "remainingPercent": 82,
+      "occurredAt": "2026-11-14T21:29:14.000Z",
+      "reportedAt": "2026-11-14T21:29:14.000Z",
+      "resetAt": "2026-11-15T00:00:00.000Z"
+    },
+    {
+      "id": "mm:general:weekly",
+      "provider": "minimax",
+      "providerKey": "minimax",
+      "label": "general (1w window)",
+      "window": "7d",
+      "windowKey": "7d",
+      "modelId": "general",
+      "modelType": "general",
+      "remainingPercent": 54,
+      "occurredAt": "2026-11-14T21:29:14.000Z",
+      "reportedAt": "2026-11-14T21:29:14.000Z",
+      "resetAt": "2026-11-16T00:00:00.000Z"
+    },
+    {
+      "id": "mm:video:interval",
+      "provider": "minimax",
+      "providerKey": "minimax",
+      "label": "general quota",
+      "window": "1d",
+      "windowKey": "1d",
+      "modelId": "video",
+      "modelType": "video",
+      "remainingPercent": 100,
+      "occurredAt": "2026-11-14T21:29:14.000Z",
+      "reportedAt": "2026-11-14T21:29:14.000Z",
+      "resetAt": "2026-11-15T21:29:14.000Z"
+    },
+    {
+      "id": "mm:MiniMax-M2:daily",
+      "provider": "minimax",
+      "providerKey": "minimax",
+      "label": "MiniMax-M2 (1d window)",
+      "window": "1d",
+      "windowKey": "1d",
+      "modelId": "MiniMax-M2",
+      "modelType": "MiniMax-M2",
+      "remainingPercent": 73,
+      "occurredAt": "2026-11-14T21:29:14.000Z",
+      "reportedAt": "2026-11-14T21:29:14.000Z",
+      "resetAt": "2026-11-15T21:29:14.000Z"
+    },
+    {
+      "id": "anthropic:general:daily",
+      "provider": "anthropic",
+      "providerKey": "anthropic",
+      "label": "Daily limit",
+      "window": "1d",
+      "windowKey": "1d",
+      "remainingPercent": 62,
+      "occurredAt": "2026-11-14T21:29:14.000Z",
+      "reportedAt": "2026-11-14T21:29:14.000Z",
+      "resetAt": "2026-11-15T21:29:14.000Z"
+    }
+  ]
+}
