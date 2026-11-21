@@ -2686,13 +2686,20 @@ public final class CompanionQuotaModel: ObservableObject {
         // lacks a token keeps its old classification, so this card never
         // gains a row the Mac does not show.
         guard label.hasPrefix("third-party") || mt.hasPrefix("3p-") || mid.hasPrefix("3p-") else { return nil }
-        let signals = [label, mt, mid].joined(separator: " ")
-        if signals.contains("weekly") || signals.contains("7-day") || signals.contains("7 day")
-            || signals.contains("168h") {
+        // Exact tokens only: substring matching misclassifies canonical
+        // window labels (kody rule).  A leading "3p-" pool prefix is
+        // stripped so short markers ("3p-7d", "3p-5hr") classify like the
+        // long forms.
+        let tokens = [label, mt, mid].flatMap { field in
+            field.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "-" })
+                .map { $0.hasPrefix("3p-") ? String($0.dropFirst(3)) : String($0) }
+        }
+        let weeklyTokens: Set<String> = ["weekly", "7-day", "7d", "1w", "168h"]
+        let fiveHourTokens: Set<String> = ["5h", "5-hour", "5hr", "300m"]
+        if tokens.contains(where: weeklyTokens.contains) {
             return "weekly"
         }
-        if signals.contains("5h") || signals.contains("5-hour") || signals.contains("5 hour")
-            || signals.contains("300m") {
+        if tokens.contains(where: fiveHourTokens.contains) {
             return "5h"
         }
         return nil

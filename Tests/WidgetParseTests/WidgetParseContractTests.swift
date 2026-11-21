@@ -131,6 +131,29 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertEqual(thirdParty.remainingPercent, 100)
     }
 
+    /// Short model markers classify too:  a pool row whose label carries no
+    /// window phrase still lands on its card through "3p-7d"/"3p-1w"/"3p-5hr"
+    /// markers, while a longer token that merely contains a window-looking
+    /// substring ("3p-15hrs") must not misclassify (kody: exact tokens,
+    /// never substring matching).
+    func testAntigravityThirdPartyShortMarkersAndSubstringGuard() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        func shortRow(_ marker: String, _ pct: Double) -> [String: Any] {
+            var w = wire("[\"producer\",\"Mac.Jays.Services\",\"" + marker + "\"]", "google-antigravity", nil, pct,
+                         "Third-Party", model: marker, source: "antigravity-usage",
+                         stamp: stamp, reset: reset)
+            w["modelType"] = marker
+            w["via"] = "antigravity"
+            return w
+        }
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": [shortRow("3p-7d", 80), shortRow("3p-1w", 70), shortRow("3p-5hr", 60), shortRow("3p-15hrs", 50)]]))
+        let thirdParty = try XCTUnwrap(parsed.first { $0.id == "antigravity-third-party" })
+        XCTAssertEqual(thirdParty.primaryWindows.map(\.cadenceToken), ["5h", "7d"],
+                       "short markers classify and the 15hrs impostor stays out: \(thirdParty.windows.map { $0.label })")
+    }
+
     /// The Cursor row through the real widget parse path.
     ///
     /// Cursor has only the seven-day pool quota now (owner ruling 2026-11-09),
