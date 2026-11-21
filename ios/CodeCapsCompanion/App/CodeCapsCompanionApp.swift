@@ -30,8 +30,8 @@ enum WidgetProbeHooks {
     static func touchGroupContainerIfRequested() {
         guard ProcessInfo.processInfo.arguments.contains("-CCWidgetProbeTouchGroupContainer") else { return }
         let fm = FileManager.default
-        // Must match CompanionQuotaModel.appGroupId (not referenced directly: it is @MainActor-isolated).
-        let resolved = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.com.simplewithus.codecaps")
+        // Same identifier as the model, via its nonisolated alias (kody).
+        let resolved = fm.containerURL(forSecurityApplicationGroupIdentifier: CompanionQuotaModel.codeCapsAppGroupId)
         let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         try? fm.createDirectory(at: documents, withIntermediateDirectories: true)

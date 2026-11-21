@@ -1005,11 +1005,15 @@ public final class CompanionNotificationDelegate: NSObject, UNUserNotificationCe
 /// 6. Supports customizable platform ordering matching the macOS preference.
 @MainActor
 public final class CompanionQuotaModel: ObservableObject {
+    /// One authoritative App Group identifier per platform (kody).  The
+    /// widget-probe launch hook runs off the main actor, so the constant is
+    /// nonisolated;  appGroupId derives from it and stays platform-conditional.
     #if os(macOS)
-    public static let appGroupId = "CC8UTF7ATG.codecaps"
+    public nonisolated static let codeCapsAppGroupId = "CC8UTF7ATG.codecaps"
     #else
-    public static let appGroupId = "group.com.simplewithus.codecaps"
+    public nonisolated static let codeCapsAppGroupId = "group.com.simplewithus.codecaps"
     #endif
+    public static let appGroupId = codeCapsAppGroupId
 
     public static let customMarksDirectory: URL = {
         let fm = FileManager.default
