@@ -74,6 +74,55 @@ final class UnifiedPoolSurfacesTests: XCTestCase {
                        "the widget publishes the pool's reading, not the pre-unification one")
     }
 
+    func testWidgetSnapshotCoalescesProjectedPoolCopiesWithDifferentLabelsAndTimes() async throws {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        let reset = iso.string(from: now.addingTimeInterval(6 * 86_400))
+        let donor = QuotaWindow(
+            id: UnifiedSubscriptionPool.canonicalWindowId(for: "cursor"),
+            provider: "Cursor", providerKey: "cursor", sourceApp: "local-mac",
+            label: "Included plan", remainingPercent: 40, resetAt: reset,
+            window: "7d", occurredAt: iso.string(from: now.addingTimeInterval(-10)),
+            source: "Cursor", accountKey: "shared-account")
+        func remotePoolWindow(_ id: String, label: String, percent: Double) -> QuotaWindow {
+            QuotaWindow(
+                id: id, provider: "xAI", providerKey: "xai", label: label,
+                remainingPercent: percent, resetAt: reset, window: "weekly",
+                occurredAt: iso.string(from: now.addingTimeInterval(-60)),
+                source: "studio", accountKey: "shared-account",
+                producerInstanceId: "studio-instance")
+        }
+        let remote = QuotaResponse(generatedAt: iso.string(from: now), windows: [
+            remotePoolWindow("xai:subscription", label: "Remote xAI subscription", percent: 55),
+            remotePoolWindow("grok:subscription", label: "Remote Grok credits", percent: 60),
+        ])
+        let suite = "com.jays.codecaps.unifiedpool.widget-dedupe.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "serverEnabled")
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+        model.setSessionFileChecksEnabled(false)
+        model.localReadForTesting = { LocalQuotaResult(windows: [donor]) }
+        model.serverFetchForTesting = { remote }
+        var published: [[QuotaWindow]] = []
+        model.widgetWriteForTesting = { published.append($0) }
+
+        model.refresh()
+        await model.refreshTaskForTesting?.value
+
+        let snapshot = try XCTUnwrap(published.last)
+        let xaiPool = snapshot.filter {
+            $0.canonicalProviderKey == "xai" && UnifiedSubscriptionPool.isPoolWindow($0)
+        }
+        XCTAssertEqual(xaiPool.count, 1,
+                       "the projected fleet-backed row and raw aliases are one participant allowance")
+        XCTAssertEqual(xaiPool.first?.id, "xai:subscription",
+                       "the first projected pool row retains its ID despite different raw labels and timestamps")
+        XCTAssertEqual(xaiPool.first?.remainingPercent, 40,
+                       "the snapshot keeps the unified donor reading instead of its stale raw copies")
+    }
+
     /// The exhaustion alerts read the rows the app publishes.
     ///
     /// The alerts read the pre-unification list, so the Cursor row read 40%
