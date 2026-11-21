@@ -159,6 +159,32 @@ final class WidgetParseContractTests: XCTestCase {
     /// Cursor has only the seven-day pool quota now (owner ruling 2026-11-09),
     /// so the widget reads it exactly as the Mac and the phone do:  one weekly
     /// meter, and no money meter standing in for a quota.
+
+    /// Space-separated window phrases ("7 day", "5 hour") must classify the
+    /// same way as the hyphenated forms.  Token-splitting would otherwise
+    /// drop those rows from the Third-Party card (kody, PR #539).
+    func testAntigravityThirdPartySpaceSeparatedWindowPhrases() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset5h = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let reset7d = ISO8601DateFormatter().string(from: Date().addingTimeInterval(5 * 86_400))
+        func poolRow(_ label: String, _ marker: String, _ pct: Double, reset: String) -> [String: Any] {
+            var w = wire("[\"producer\",\"Mac.Jays.Services\",\"" + marker + "\"]", "google-antigravity", nil, pct,
+                         label, model: marker, source: "antigravity-usage",
+                         stamp: stamp, reset: reset)
+            w["modelType"] = marker
+            w["via"] = "antigravity"
+            return w
+        }
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": [
+                poolRow("Third-Party · 5 hour window", "3p-pool", 60, reset: reset5h),
+                poolRow("Third-Party · 7 day window", "3p-pool", 80, reset: reset7d),
+            ]]))
+        let thirdParty = try XCTUnwrap(parsed.first { $0.id == "antigravity-third-party" })
+        XCTAssertEqual(thirdParty.primaryWindows.map(\.cadenceToken), ["5h", "7d"],
+                       "space-separated phrases classify: \(thirdParty.windows.map { $0.label })")
+    }
+
     func testTheCursorRowIsOneWeeklyMeterAndNoMoneyMeter() throws {
         let iso = ISO8601DateFormatter()
         let stamp = iso.string(from: Date())

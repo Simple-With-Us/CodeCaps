@@ -340,8 +340,22 @@ public enum QuotaCardProjection {
         }
         let weeklyTokens: Set<String> = ["weekly", "7-day", "7d", "1w", "168h"]
         let fiveHourTokens: Set<String> = ["5h", "5-hour", "5hr", "300m"]
-        if tokens.contains(where: weeklyTokens.contains) { return "weekly" }
-        if tokens.contains(where: fiveHourTokens.contains) { return "5h" }
+        // Space-separated phrases ("7 day", "5 hour") split into isolated
+        // tokens that miss the hyphenated catalog entries.  Recombine
+        // adjacent tokens with and without a hyphen so those labels
+        // classify the same way as "7-day" / "5-hour" / "5hr".
+        func matches(_ catalog: Set<String>) -> Bool {
+            if tokens.contains(where: catalog.contains) { return true }
+            guard tokens.count >= 2 else { return false }
+            for i in 0..<(tokens.count - 1) {
+                let hyphenated = tokens[i] + "-" + tokens[i + 1]
+                let glued = tokens[i] + tokens[i + 1]
+                if catalog.contains(hyphenated) || catalog.contains(glued) { return true }
+            }
+            return false
+        }
+        if matches(weeklyTokens) { return "weekly" }
+        if matches(fiveHourTokens) { return "5h" }
         return nil
     }
 
