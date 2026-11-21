@@ -21,7 +21,9 @@ name: Auto-merge PRs
 # (paginated) and re-classifies each through the reusable's existing
 # rearm_pr_number mode - every gate runs identically (current-head checks,
 # review gate, holds incl. the timeline gate, draft), so an idle mergeable
-# PR is picked up within one sweep.  No PR code is ever checked out or
+# PR gets another opportunity on a best-effort schedule, not a guaranteed
+# recovery deadline. Failed/dropped sweeps and changing PR lists can delay
+# individual PRs; clock rotation does not retain unfinished slices. No PR code is ever checked out or
 # executed (rearm pins the default branch for gate sources).  Fork PRs stay
 # excluded by the reusable's own same-repo rule - that gate is not weakened.
 #
@@ -103,7 +105,24 @@ jobs:
           # of how many event-path runs interleave (SWEEP_OFFSET override
           # exists for tests only; the workflow never sets it).
           off="${SWEEP_OFFSET:-$(( $(date +%s) / 900 ))}"
-          pages="$(gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[] | {number, draft, full_name: (.head.repo.full_name // "")}')"
+          # Retry the same listing within this run. Each attempt has a
+          # separate budget and partial output is discarded on failure.
+          # This improves transient-list resilience, not cross-run fairness:
+          # a killed/exhausted run still leaves its clock-selected slice unprocessed.
+          listed=false
+          pages=''
+          for attempt in 1 2 3; do
+            if pages="$(timeout --kill-after=5s 150s gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[] | {number, draft, full_name: (.head.repo.full_name // "")}')"; then
+              listed=true
+              break
+            fi
+            pages=''
+            if [ "$attempt" -lt 3 ]; then sleep 5; fi
+          done
+          if [ "$listed" != true ]; then
+            echo "::error::PR listing failed after bounded retries; no rearm matrix emitted"
+            exit 1
+          fi
           if [ -z "$pages" ]; then
             prs='[]'
           else
