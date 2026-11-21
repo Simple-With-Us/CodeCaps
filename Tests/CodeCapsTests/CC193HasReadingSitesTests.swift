@@ -55,7 +55,7 @@ final class CC193HasReadingSitesTests: XCTestCase {
             remainingPercent: nil,
             resetAt: nil,
             maskedWindowIds: []
-        )
+, drivingWindowId: nil)
     }
 
     // MARK: - MonitorModel.freshWindows

@@ -18,7 +18,7 @@ final class PipLowQuotaTests: XCTestCase {
             section: QuotaPlatformSection(providerKey: "anthropic", providerLabel: "Claude",
                                           via: nil, expected: true, windows: [snapshot]),
             poolKey: nil, remainingPercent: remaining, resetAt: nil,
-            maskedWindowIds: masked ? ["w"] : [])
+            maskedWindowIds: masked ? ["w"] : [], drivingWindowId: nil)
     }
 
     private func evaluate(_ row: DisplaySection?, session: inout PipLowQuotaSession,
@@ -61,7 +61,7 @@ final class PipLowQuotaTests: XCTestCase {
                 platformTitle: healthy.platformTitle,
                 section: QuotaPlatformSection(providerKey: healthy.providerKey,
                     providerLabel: healthy.section.providerLabel, expected: true, windows: windows),
-                poolKey: nil, remainingPercent: newRemaining ?? 70, resetAt: nil, maskedWindowIds: [])
+                poolKey: nil, remainingPercent: newRemaining ?? 70, resetAt: nil, maskedWindowIds: [], drivingWindowId: nil)
         }
         XCTAssertFalse(evaluate(combined(newRemaining: nil, seconds: 0), session: &session))
         XCTAssertFalse(evaluate(combined(newRemaining: 5, seconds: 1), session: &session),
@@ -159,7 +159,7 @@ final class PipLowQuotaTests: XCTestCase {
             return DisplaySection(id: "anthropic", providerKey: "anthropic", title: "Claude",
                 platformTitle: "Claude", section: QuotaPlatformSection(providerKey: "anthropic",
                     providerLabel: "Claude", expected: true, windows: windows),
-                poolKey: nil, remainingPercent: remaining, resetAt: nil, maskedWindowIds: [])
+                poolKey: nil, remainingPercent: remaining, resetAt: nil, maskedWindowIds: [], drivingWindowId: nil)
         }
         XCTAssertFalse(evaluate(combined(50, seconds: 0), session: &session))
         XCTAssertTrue(evaluate(combined(5, seconds: 10), session: &session))
