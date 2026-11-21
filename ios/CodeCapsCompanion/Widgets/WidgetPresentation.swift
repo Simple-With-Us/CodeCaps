@@ -1203,7 +1203,17 @@ public enum WidgetPresentation {
                   !(trimmedLabel == "plan" && w.remainingPercent == nil) else { continue }
             let parsedReset = parseDate(from: w.resetAt)
             let observed = parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt)
-            let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
+            let effectiveWindowToken = QuotaWindowVocabulary.authoritativeWindowToken(
+                providerKey: providerKey,
+                id: w.id,
+                modelId: [w.modelId, w.modelType].compactMap {
+                    $0?.trimmingCharacters(in: .whitespacesAndNewlines)
+                }.first { !$0.isEmpty },
+                label: w.label,
+                windowToken: w.window,
+                windowKey: w.windowKey
+            )
+            let cadence = formatCadence(w.label, window: effectiveWindowToken, resetAt: parsedReset)
             let pct = w.remainingPercent
             // The one shared rule decides, as it does on the phone and on the
             // Mac:  a reading outranks the export's stale exhausted word, and
@@ -1211,7 +1221,7 @@ public enum WidgetPresentation {
             let exhausted = QuotaCapRule.isExhausted(remainingPercent: pct,
                                                       providerSaysExhausted: w.isExhausted ?? false)
             var displayLabel = QuotaWindowVocabulary.windowLabel(
-                windowToken: w.window,
+                windowToken: effectiveWindowToken,
                 existingLabel: w.label.isEmpty ? cadence : w.label,
                 resetAt: parsedReset
             )
@@ -1261,7 +1271,7 @@ public enum WidgetPresentation {
                 isSupplementaryVideoQuota: isSupplementaryVideo,
                 isModelDetail: isModelDetail,
                 absoluteRemaining: w.absoluteRemaining,
-                rawWindowToken: w.window,
+                rawWindowToken: effectiveWindowToken,
                 wireLabel: w.label,
                 quotaUnit: w.quotaUnit
             )
@@ -1284,7 +1294,12 @@ public enum WidgetPresentation {
             let wireCadence = (w.windowKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let cadenceKey = (item.isSupplementaryVideoQuota ? "video|" : "plan|")
                 + Self.normalizedAllowanceSeries(providerKey: providerKey, series: Self.allowanceSeries(forWireId: w.id))
-                + "|" + Self.canonicalWireCadence(wireCadence: wireCadence, windowToken: w.window, label: w.label, resetAt: parsedReset)
+                + "|" + Self.canonicalWireCadence(
+                    wireCadence: effectiveWindowToken == w.window ? wireCadence : "",
+                    windowToken: effectiveWindowToken,
+                    label: w.label,
+                    resetAt: parsedReset
+                )
             if let current = windowByCadence[cadenceKey] {
                 if item.isFresher(than: current, now: now) {
                     windowByCadence[cadenceKey] = item

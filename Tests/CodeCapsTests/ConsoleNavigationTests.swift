@@ -191,6 +191,29 @@ final class ConsoleSelectionTests: XCTestCase {
         XCTAssertFalse(model.hasLocalHistorySource(for: row))
     }
 
+    func testSharedPoolOriginDoesNotHideLocallyMeasuredHistory() throws {
+        let model = MonitorModel(defaults: defaults())
+        let now = Date()
+        let local = QuotaWindow(
+            id: UnifiedSubscriptionPool.canonicalWindowId(for: "cursor"),
+            provider: "Cursor", providerKey: "cursor", sourceApp: "local-mac",
+            label: "Included plan", remainingPercent: 70,
+            resetAt: ISO8601DateFormatter().string(from: now.addingTimeInterval(6 * 86_400)),
+            window: "7d", occurredAt: ISO8601DateFormatter().string(from: now),
+            source: "Cursor", accountKey: "cursor-account")
+        model.injectLocalHistorySourceForTests([local])
+
+        let pooled = UnifiedSubscriptionPool.share(
+            windows: [local], now: now, targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let response = QuotaResponse(generatedAt: "", windows: pooled)
+        let section = try XCTUnwrap(response.platformSections(now: now).first { $0.providerKey == "cursor" })
+        let row = try XCTUnwrap(DisplaySection.rows(for: section, now: now).first)
+        XCTAssertNotNil(row.section.windows.first?.window.sharedPoolOrigin,
+                        "sharing annotates the displayed local participant")
+        XCTAssertTrue(model.hasLocalHistorySource(for: row),
+                      "pool provenance alone must not hide samples recorded from this local window")
+    }
+
     func testPooledAntigravityDisplayRetainsLocalHistoryProvenance() throws {
         let model = MonitorModel(defaults: defaults())
         let now = Date()

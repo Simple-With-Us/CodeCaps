@@ -41,7 +41,7 @@ public struct CompanionContentView: View {
     public var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
+                LazyVStack(spacing: 0) {
                     if let error = model.lastError {
                         errorBanner(error)
                     }
@@ -58,8 +58,8 @@ public struct CompanionContentView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
                 .frame(maxWidth: .infinity)
             }
             #if os(iOS)
@@ -317,215 +317,14 @@ public struct CompanionContentView: View {
     }
 
     private func quotaCard(_ item: CompanionQuotaItem) -> some View {
-        // One canonical reading per allowance, the same resolution the Mac
-        // app leads with.  Source detail lives in Settings, for debugging;
-        // the main list just shows quotas.
-        let scope: CompanionSourceScope = .allSources
-        let isExpanded = expandedIds.contains(item.id) && item.isExpandable
-        let short = item.cardShortWindow(scope: scope)
-        let long = item.cardLongWindow(scope: scope)
-        let cardWindows = item.cardWindows(scope: scope)
-        let extraWindows = item.cardDetailWindows(scope: scope)
-        let atCapWindow = item.atCapWindow(scope: scope)
-        let isAtCap = atCapWindow != nil
-        // Two pools of one provider share a title (Antigravity's Gemini and
-        // Third-Party pools), so a collapsed card whose title is not unique
-        // also shows the pool subtitle - the same gate as Settings >
-        // Platform Order (owner, 2026-11-06).
-        let duplicatedTitles = Set(model.items.map(\.title).filter { title in
-            model.items.count(where: { $0.title == title }) > 1
-        })
-        let usableMuseExtra = item.providerKey == "muse-assist" ? cardWindows.first(where: {
-            QuotaWindowVocabulary.isMuseAssistExtra(providerKey: item.providerKey, windowToken: $0.rawWindowToken, label: $0.label, resetAt: $0.resetAt)
-            && (($0.remainingPercent ?? 0) > 0 || ($0.absoluteRemaining ?? 0) > 0)
-        }) : nil
-        let shouldDimTitle = isAtCap && usableMuseExtra == nil
-
-        return VStack(alignment: .leading, spacing: 12) {
-            // Main clickable row
-            HStack(alignment: .center, spacing: 12) {
-                CompanionProviderLogo(item: item)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(item.title)
-                            .font(.system(size: 15, weight: .semibold))
-                            .italic(shouldDimTitle)
-                            .foregroundStyle(shouldDimTitle ? CompanionTheme.supporting : .primary)
-                    }
-                    if duplicatedTitles.contains(item.title),
-                       let subtitle = item.subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.system(size: 11))
-                            .foregroundStyle(shouldDimTitle ? CompanionTheme.supporting : .secondary)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer()
-                HStack(spacing: 10) {
-                    // The per-provider reset alarm, offered only while All is
-                    // off: under All every provider alarms and there is
-                    // nothing to choose.  Solid when on, faint when off.
-                    if !model.alarmsAll {
-                        Button {
-                            model.toggleProviderAlarm(for: item.id)
-                        } label: {
-                            Image(systemName: item.isAlarmEnabled ? "bell.fill" : "bell")
-                                .font(.system(size: 14))
-                                .foregroundStyle(item.isAlarmEnabled ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Reset alarm for \(item.title)")
-                        .accessibilityValue(item.isAlarmEnabled ? "on" : "off")
-                    }
-
-                    VStack(alignment: .trailing, spacing: 2) {
-                        if let extra = usableMuseExtra {
-                            Text("Extra balance")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.secondary)
-                            Text(extra.displayPercent)
-                                .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
-                                .foregroundStyle(extra.statusColor)
-                        } else {
-                            Text(item.cardDisplayPercent(scope: scope))
-                                .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
-                                .foregroundStyle(item.cardStatusColor(scope: scope))
-                        }
-                    }
-
-                    if item.isExpandable {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 14, height: 14)
-                            .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                            .accessibilityHidden(true)
-                    }
-                }
-            }
-
-            // The cap line or meters: when capped, the bars hide and one clean line names the cap and exact reset time.
-            if let atCapSummary = item.atCapSummary(scope: scope) {
-                if let extra = usableMuseExtra {
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Using extra balance")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(Color.primary)
-                            Text(atCapSummary)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                            if let ageCue = item.atCapReadingAgeCue(scope: scope) {
-                                Text(ageCue)
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        CompanionMeterView(caption: extra.caption, window: extra)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("At cap. \(atCapSummary)")
-                } else {
-                    VStack(alignment: .center, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(CompanionTheme.danger)
-                            Text(atCapSummary)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(CompanionTheme.danger)
-                                .lineLimit(2)
-                                .minimumScaleFactor(0.85)
-                        }
-                        if let exact = item.atCapResetExactTime(scope: scope), !exact.isEmpty {
-                            Text(exact)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        if let ageCue = item.atCapReadingAgeCue(scope: scope) {
-                            Text(ageCue)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 4)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("At cap. \(atCapSummary)")
-                }
-            } else if cardWindows.isEmpty, let lastReading = item.deadCopyObservedAt {
-                // Every window this provider reported is a copy of a period
-                // that has already ended, so there is no honest bar to draw:
-                // say the reading is stale, and when the provider was last
-                // heard from, instead of leaving the card blank or reviving a
-                // figure whose window is over.
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Waiting for a fresh reading")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(CompanionTheme.supporting)
-                    Text("Last reading \(UpdatedStamp.label(lastReading))")
-                        .font(.system(size: 12))
-                        .foregroundStyle(CompanionTheme.supporting)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 4)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Waiting for a fresh reading, last reading \(UpdatedStamp.label(lastReading))")
-            } else {
-                // Quota Bars side by side in a clean 2-column grid
-                HStack(spacing: 12) {
-                    if let short {
-                        CompanionMeterView(
-                            caption: short.window.caption,
-                            window: short.window
-                        )
-                        .frame(maxWidth: .infinity)
-                    }
-                    if let long, long.window.id != short?.window.id {
-                        CompanionMeterView(
-                            caption: long.window.caption,
-                            window: long.window
-                        )
-                        .frame(maxWidth: .infinity)
-                    } else if short == nil {
-                        if let first = cardWindows.first {
-                            CompanionMeterView(caption: first.caption, window: first)
-                                .frame(maxWidth: .infinity)
-                            Spacer()
-                                .frame(maxWidth: .infinity)
-                        }
-                    } else {
-                        // Single meter row: keep first meter in column 1 and column 2 empty
-                        Spacer()
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-            }
-
-            if isExpanded && !extraWindows.isEmpty {
-                Divider().padding(.vertical, 2)
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(extraWindows) { win in windowRow(win) }
-                }
-            }
-        }
-        .padding(14)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 14))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if item.isExpandable {
-                toggleExpanded(item.id)
-            }
-        }
+        CompanionQuotaRow(
+            item: item,
+            isExpanded: expandedIds.contains(item.id),
+            showSubtitle: model.items.contains { $0.id != item.id && $0.title == item.title },
+            alarmsAll: model.alarmsAll,
+            toggleExpanded: { toggleExpanded(item.id) },
+            toggleAlarm: { model.toggleProviderAlarm(for: item.id) }
+        )
     }
 
     // MARK: - Companion Provider Details View
@@ -1048,6 +847,172 @@ public struct CompanionContentView: View {
     }
 }
 
+/// A compact quota row shared by the phone list and native layout probes.
+/// Selection, caps and detail windows still come from the companion model.
+public struct CompanionQuotaRow: View {
+    public let item: CompanionQuotaItem
+    public var isExpanded: Bool
+    public var showSubtitle: Bool
+    public var alarmsAll: Bool
+    private let toggleExpanded: () -> Void
+    private let toggleAlarm: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .subheadline) private var identityWidth: CGFloat = 112
+
+    public init(item: CompanionQuotaItem, isExpanded: Bool = false,
+                showSubtitle: Bool = false, alarmsAll: Bool = true,
+                toggleExpanded: @escaping () -> Void = {}, toggleAlarm: @escaping () -> Void = {}) {
+        self.item = item
+        self.isExpanded = isExpanded
+        self.showSubtitle = showSubtitle
+        self.alarmsAll = alarmsAll
+        self.toggleExpanded = toggleExpanded
+        self.toggleAlarm = toggleAlarm
+    }
+
+    private var windows: [CompanionWindowItem] { item.cardWindows(scope: .allSources) }
+    private var usableExtra: CompanionWindowItem? {
+        guard item.providerKey == "muse-assist" else { return nil }
+        return windows.first {
+            QuotaWindowVocabulary.isMuseAssistExtra(providerKey: item.providerKey,
+                windowToken: $0.rawWindowToken, label: $0.label, resetAt: $0.resetAt)
+                && (($0.remainingPercent ?? 0) > 0 || ($0.absoluteRemaining ?? 0) > 0)
+        }
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack { identity; Spacer(minLength: 0); alarmButton }
+                    summary
+                }
+                .padding(.vertical, 10)
+            } else {
+                HStack(spacing: 8) {
+                    identity.frame(width: identityWidth, alignment: .leading)
+                    summary.frame(maxWidth: .infinity, alignment: .leading)
+                    alarmButton
+                    if item.isExpandable {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                            .accessibilityHidden(true)
+                    }
+                }
+                .frame(minHeight: 44)
+                .padding(.vertical, 2)
+            }
+            if isExpanded && item.isExpandable {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(item.cardDetailWindows(scope: .allSources)) { window in
+                        CompanionMeterView(caption: window.caption, window: window)
+                    }
+                }
+                .padding(.leading, 28)
+                .padding(.bottom, 10)
+            }
+            Divider()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if item.isExpandable { toggleExpanded() } }
+        .accessibilityIdentifier("quota-row-\(item.id)")
+        .accessibilityActions {
+            if item.isExpandable {
+                Button(isExpanded ? "Collapse Details" : "Show Details", action: toggleExpanded)
+            }
+        }
+    }
+
+    private var identity: some View {
+        HStack(spacing: 6) {
+            CompanionProviderLogo(item: item, size: 22, showsBackground: false)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title)
+                    .font(.subheadline.weight(.semibold))
+                    .italic(item.atCapWindow(scope: .allSources) != nil && usableExtra == nil)
+                    .foregroundStyle(item.atCapWindow(scope: .allSources) != nil && usableExtra == nil
+                        ? CompanionTheme.supporting : .primary)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                    .minimumScaleFactor(0.85)
+                if showSubtitle, let subtitle = item.subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                }
+            }
+
+        }
+    }
+
+    @ViewBuilder private var alarmButton: some View {
+            if !alarmsAll {
+                Button(action: toggleAlarm) {
+                    Image(systemName: item.isAlarmEnabled ? "bell.fill" : "bell")
+                        .font(.caption)
+                        .foregroundStyle(item.isAlarmEnabled ? CompanionTheme.accent : .secondary)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Reset alarm for \(item.title)")
+                .accessibilityValue(item.isAlarmEnabled ? "On" : "Off")
+            }
+    }
+
+    @ViewBuilder private var summary: some View {
+        if let cap = item.atCapSummary(scope: .allSources) {
+            if let extra = usableExtra {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(cap).font(.caption2).foregroundStyle(CompanionTheme.supporting)
+                    CompanionMeterView(caption: extra.caption, window: extra)
+                }
+                .accessibilityElement(children: .combine)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(cap)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let exact = item.atCapResetExactTime(scope: .allSources), !exact.isEmpty {
+                        Text(exact).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if let cue = item.atCapReadingAgeCue(scope: .allSources) {
+                        Text(cue).font(.caption2).foregroundStyle(CompanionTheme.supporting)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+        } else if windows.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                if let lastReading = item.deadCopyObservedAt {
+                    Text("Waiting for a fresh reading")
+                        .font(.caption).foregroundStyle(CompanionTheme.supporting)
+                    Text("Last reading \(UpdatedStamp.label(lastReading))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text("Unavailable").font(.caption).foregroundStyle(CompanionTheme.supporting)
+                }
+            }
+        } else {
+            let first = item.cardShortWindow(scope: .allSources)?.window ?? windows.first
+            let second = item.cardLongWindow(scope: .allSources)?.window
+            HStack(spacing: 8) {
+                if let first {
+                    CompanionMeterView(caption: first.caption, window: first)
+                }
+                if let second, second.id != first?.id {
+                    CompanionMeterView(caption: second.caption, window: second)
+                } else {
+                    Color.clear.frame(maxWidth: .infinity, maxHeight: 1).accessibilityHidden(true)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Companion Meter View
 
 public struct CompanionMeterView: View {
@@ -1059,47 +1024,54 @@ public struct CompanionMeterView: View {
         self.window = window
     }
 
+    private var pacingBackground: Color {
+        guard !window.isMasked, let remaining = window.remainingPercent, remaining.isFinite else { return .clear }
+        if let elapsed = window.elapsedFraction(), elapsed.isFinite, elapsed > 0, elapsed < 1 {
+            let delta = remaining - (1 - elapsed) * 100
+            if delta >= 15 { return .green.opacity(0.18 + 0.12 * min(1, (delta - 15) / 40)) }
+            if delta >= 0 { return .green.opacity(0.12) }
+            if delta <= -20 { return .red.opacity(0.20 + 0.15 * min(1, (-delta - 20) / 40)) }
+            return .orange.opacity(0.18)
+        }
+        if remaining >= 50 { return .green.opacity(0.12) }
+        return remaining >= 20 ? .orange.opacity(0.16) : .red.opacity(0.22)
+    }
+
     public var body: some View {
-        // Each allowance owns its caption, reading and reset.  The percentage
-        // and reset stay together at the leading edge, even in narrow columns.
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 4) {
                 Text(caption)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.primary)
+                    .font(.caption2.weight(.semibold))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-
+                    .minimumScaleFactor(0.8)
+                CompanionUsageBar(
+                    remainingPercent: window.isMasked ? nil : window.remainingPercent.flatMap { $0.isFinite ? $0 : nil },
+                    elapsedFraction: window.isMasked ? nil : window.elapsedFraction().flatMap { $0.isFinite ? $0 : nil }, height: 6
+                )
+                .frame(minWidth: 24)
                 Text(window.displayPercent)
-                    .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(window.statusColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-
-                Text(window.meterCountdown())
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .font(.caption2.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 1)
+                    .background(pacingBackground, in: RoundedRectangle(cornerRadius: 3))
+                    .fixedSize()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            CompanionUsageBar(
-                remainingPercent: window.isMasked ? nil : window.remainingPercent.flatMap { $0.isFinite ? $0 : nil },
-                elapsedFraction: window.isMasked ? nil : window.elapsedFraction().flatMap { $0.isFinite ? $0 : nil },
-                height: 7
-            )
-            .frame(maxWidth: .infinity)
-
+            Text(window.meterCountdown())
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .trailing)
             if let cue = window.staleReadingCue() {
                 Text(cue)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.caption2)
                     .foregroundStyle(CompanionTheme.warning)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(caption), \(window.displayPercent) remaining, resets in \(window.meterCountdown())\(window.staleReadingCue().map { ", \($0)" } ?? "")")
     }
 }
 
@@ -1180,13 +1152,13 @@ public struct CompanionUsageBar: View {
                     let markerWidth: CGFloat = 3.0
 
                     // Halo
-                    Capsule()
+                    Rectangle()
                         .fill(pacingMarkerHaloColor)
                         .frame(width: 5.5, height: markerHeight + 2)
                         .position(x: markerX, y: geo.size.height / 2)
 
                     // Line
-                    Capsule()
+                    Rectangle()
                         .fill(pacingMarkerColor)
                         .frame(width: markerWidth, height: markerHeight)
                         .position(x: markerX, y: geo.size.height / 2)
@@ -1202,12 +1174,15 @@ public struct CompanionUsageBar: View {
 public struct CompanionProviderLogo: View {
     public let item: CompanionQuotaItem
     public var size: CGFloat = 36
+    public var showsBackground: Bool = true
+    private var markSize: CGFloat { showsBackground ? size * 0.62 : size }
 
     @Environment(\.colorScheme) private var colorScheme
 
-    public init(item: CompanionQuotaItem, size: CGFloat = 36) {
+    public init(item: CompanionQuotaItem, size: CGFloat = 36, showsBackground: Bool = true) {
         self.item = item
         self.size = size
+        self.showsBackground = showsBackground
     }
 
     private var customMarkURL: URL? {
@@ -1241,6 +1216,7 @@ public struct CompanionProviderLogo: View {
 
     public var body: some View {
         ZStack {
+            if showsBackground {
             #if os(iOS)
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Color(uiColor: .tertiarySystemGroupedBackground))
@@ -1249,6 +1225,8 @@ public struct CompanionProviderLogo: View {
                 .fill(Color.secondary.opacity(0.1))
             #endif
 
+            }
+
             if let customImage = loadCustomImage() {
                 if customMarkMode == "template" {
                     customImage
@@ -1256,13 +1234,13 @@ public struct CompanionProviderLogo: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .foregroundStyle(.primary)
-                        .frame(width: size * 0.62, height: size * 0.62)
+                        .frame(width: markSize, height: markSize)
                 } else {
                     customImage
                         .renderingMode(.original)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: size * 0.62, height: size * 0.62)
+                        .frame(width: markSize, height: markSize)
                 }
             } else if let logoName = resolvedLogoName {
                 if isMonochrome {
@@ -1271,13 +1249,13 @@ public struct CompanionProviderLogo: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .foregroundStyle(.primary)
-                        .frame(width: size * 0.62, height: size * 0.62)
+                        .frame(width: markSize, height: markSize)
                 } else {
                     Image(logoName)
                         .renderingMode(.original)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: size * 0.62, height: size * 0.62)
+                        .frame(width: markSize, height: markSize)
                 }
             } else {
                 Image(systemName: item.fallbackSymbolName)
