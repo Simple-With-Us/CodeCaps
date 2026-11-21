@@ -819,7 +819,7 @@ final class GlanceMeterTests: XCTestCase {
             section: QuotaPlatformSection(providerKey: "xai", providerLabel: "xAI", via: nil,
                                           expected: true, windows: windows),
             poolKey: nil, remainingPercent: windows.compactMap(\.remainingPercent).min(),
-            resetAt: windows.compactMap(\.resetAt).min(), maskedWindowIds: [])
+            resetAt: windows.compactMap(\.resetAt).min(), maskedWindowIds: [], drivingWindowId: nil)
     }
 
     /// The owner's screenshot (2026-11-19):  the fleet hands the xAI row one
