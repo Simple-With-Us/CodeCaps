@@ -448,7 +448,15 @@ final class GlanceToggleTests: XCTestCase {
     }
 
     func testTheSwitchIsTwoEqualBoxesInTitleCase() {
-        let widest = GlanceViewMode.allCases.map { width($0.title, size: 11, weight: .semibold) }.max() ?? 0
+        // #535 moved the segment titles to semantic fonts (.caption) so they
+        // honor Dynamic Type; the fixed 11pt measuring stick went stale.
+        // Measure the widest title the way the view actually renders it.
+        let widest = GlanceViewMode.allCases.map { mode in
+            NSHostingView(rootView: Text(mode.title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize()).fittingSize.width
+        }.max() ?? 0
         let box = widest + 2 * Metrics.glanceHeaderSegmentPadding
         let host = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac), model: model))
         XCTAssertEqual(host.fittingSize.width, 2 * box + 1, accuracy: 2, "two equal boxes and the hairline between")
