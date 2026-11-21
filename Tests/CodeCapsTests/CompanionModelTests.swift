@@ -204,11 +204,17 @@ final class CompanionModelTests: XCTestCase {
     }
 
     private func hasPlatformAppGroups(_ source: String) throws -> Bool {
-        // Match active declarations, not documentation that mentions the right IDs.
-        let comments = try NSRegularExpression(pattern: #"(?s)/\*.*?\*/|(?m)//[^\n]*"#)
-        let code = comments.stringByReplacingMatches(
-            in: source, range: NSRange(source.startIndex..., in: source), withTemplate: ""
-        )
+        // Consume quoted literals before comments so URL and comment markers stay literal.
+        let tokens = try NSRegularExpression(pattern: #""(?:\\.|[^"\\])*"|/\*[\s\S]*?\*/|//[^\n]*"#)
+        let code = NSMutableString(string: source)
+        for match in tokens.matches(in: source, range: NSRange(source.startIndex..., in: source)).reversed() {
+            let token = (source as NSString).substring(with: match.range)
+            if token.hasPrefix("/") {
+                let blank = token.map { $0 == "\n" ? "\n" : " " }.joined()
+                code.replaceCharacters(in: match.range, with: blank)
+            }
+        }
+        let activeCode = code as String
         let declaration = #"[ \t]*(?:public[ \t]+)?(?:nonisolated[ \t]+)?static[ \t]+let[ \t]+"#
         func conditional(_ name: String) -> String {
             #"(?m)^[ \t]*#if[ \t]+os\(macOS\)[ \t]*\n"# +
@@ -219,7 +225,7 @@ final class CompanionModelTests: XCTestCase {
         }
         func matches(_ pattern: String) throws -> Bool {
             try NSRegularExpression(pattern: pattern).firstMatch(
-                in: code, range: NSRange(code.startIndex..., in: code)
+                in: activeCode, range: NSRange(activeCode.startIndex..., in: activeCode)
             ) != nil
         }
         if try matches(conditional("appGroupId")) { return true }
@@ -245,6 +251,16 @@ final class CompanionModelTests: XCTestCase {
             "\npublic static let appGroupId = codeCapsAppGroupId\n"
         XCTAssertTrue(try hasPlatformAppGroups(direct))
         XCTAssertTrue(try hasPlatformAppGroups(shared))
+        let literalMarkers = #"static let url = "https://example.invalid/*literal*/" // real comment"#
+        XCTAssertTrue(try hasPlatformAppGroups(literalMarkers + "\n" + shared))
+        XCTAssertTrue(try hasPlatformAppGroups(shared + "\n" + literalMarkers))
+        XCTAssertTrue(try hasPlatformAppGroups(shared.replacingOccurrences(
+            of: "#if os(macOS)", with: "#if os(macOS) // actual comment")))
+        XCTAssertTrue(try hasPlatformAppGroups(
+            #"static let open = "/*""# + "\n" + shared + "\n" + #"static let close = "*/""#))
+        let escapedQuote = #"static let quoted = "escaped \" // still a literal""#
+        XCTAssertTrue(try hasPlatformAppGroups(escapedQuote + "\n" + shared))
+
         let swapped = shared.replacingOccurrences(of: "CC8UTF7ATG.codecaps", with: "temporary")
             .replacingOccurrences(of: "group.com.simplewithus.codecaps", with: "CC8UTF7ATG.codecaps")
             .replacingOccurrences(of: "temporary", with: "group.com.simplewithus.codecaps")
