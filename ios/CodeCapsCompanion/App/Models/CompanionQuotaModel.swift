@@ -2694,8 +2694,10 @@ public final class CompanionQuotaModel: ObservableObject {
             field.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "-" })
                 .map { $0.hasPrefix("3p-") ? String($0.dropFirst(3)) : String($0) }
         }
-        let weeklyTokens: Set<String> = ["weekly", "7-day", "7d", "1w", "168h"]
-        let fiveHourTokens: Set<String> = ["5h", "5-hour", "5hr", "300m"]
+        // Catalogs mirror the exact-token lists above, short forms included
+        // (kody:  week, 10080m and 5hours complete the round-1 ask).
+        let weeklyTokens: Set<String> = ["weekly", "week", "7-day", "7d", "1w", "168h", "10080m"]
+        let fiveHourTokens: Set<String> = ["5h", "5-hour", "5hr", "5hours", "300m"]
         // Space-separated phrases ("7 day", "5 hour") split into isolated
         // tokens that miss the hyphenated catalog entries.  Recombine
         // adjacent tokens with and without a hyphen so those labels
