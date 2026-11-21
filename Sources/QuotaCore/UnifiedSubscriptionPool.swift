@@ -332,9 +332,33 @@ public enum UnifiedSubscriptionPool {
     /// are the identity, exactly as `QuotaResponse.dedupedGrokSubscription`
     /// reads them.
     private static func poolIdentity(of id: String) -> String? {
-        let parts = id.split(separator: ":")
+        let parts = bucketId(of: id).split(separator: ":")
         guard parts.count >= 2 else { return nil }
         return "\(parts[parts.count - 2]):\(parts[parts.count - 1])"
+    }
+
+    /// The bucket a window id names, without the producer scope the fleet
+    /// wraps it in.
+    ///
+    /// The fleet ships a pulled window's id as a JSON array of strings kept
+    /// whole inside the id string
+    /// (`["producer","Mac.Jays.Services","xai:subscription"]`), and the last
+    /// element is the bucket.  Splitting that string on `:` read the pool as
+    /// `…xai` / `subscription"]`, so no pulled copy of the pool was ever the
+    /// pool:  two producers' copies of the one xAI pool were both drawn on
+    /// the xAI row as two 7d bars (CC-236).  Any other id is returned as is.
+    ///
+    /// This is a parser, not a validator:  the last element is returned
+    /// unvalidated, including a `grok:subscription` bucket on an xAI
+    /// window (the fleet files the Grok credits payload under the xAI
+    /// key).  Callers must validate the identity against the provider-keyed
+    /// canonical set, as `isPoolWindow` already does.
+    static func bucketId(of id: String) -> String {
+        guard id.first == "[",
+              let elements = try? JSONDecoder().decode([String].self, from: Data(id.utf8)),
+              let last = elements.last
+        else { return id }
+        return last
     }
 
     /// A comparable form of a label, unit or token: trimmed and lowercased,
