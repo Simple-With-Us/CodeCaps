@@ -108,8 +108,73 @@ import AppIntents
   precondition(defaults.string(forKey:"widgetDetail:"+scope) == nil)
   print("PASS: missing/zero/extra captions and intent select/back persistence")
  }
+ @MainActor static func renderPhoneRows() throws {
+  let now = Date()
+  func window(_ id: String, _ cadence: String, _ percent: Double, _ hours: Double) -> CompanionWindowItem {
+   CompanionWindowItem(id: id, label: cadence, cadence: cadence, remainingPercent: percent,
+     resetAt: now.addingTimeInterval(hours * 3600), reportedAt: now, rawWindowToken: cadence)
+  }
+  func plan(_ key: String, _ title: String, _ readings: [CompanionWindowItem], subtitle: String? = nil,
+            id: String? = nil) -> CompanionQuotaItem {
+   CompanionQuotaItem(id: id ?? key, providerKey: key, title: title, subtitle: subtitle,
+     remainingPercent: readings.compactMap(\.remainingPercent).min(), resetAt: readings.first?.resetAt,
+     isExhausted: false, isAlarmEnabled: false, windows: readings)
+  }
+  let mini = plan("minimax", "MiniMax", [window("minimax:5h", "5h", 99, 4.5), window("minimax:7d", "7d", 5, 42)])
+  let rows = [mini,
+   plan("anthropic", "Claude", [window("claude:5h", "5h", 68, 4), window("claude:7d", "7d", 0, 88)]),
+   plan("openai", "Codex", [window("codex:7d", "7d", 98, 163)]),
+   plan("muse-code", "Muse Code", [window("muse:5h", "5h", 97, 2.25), window("muse:7d", "7d", 57, 42)]),
+   plan("muse-assist", "Muse Assist", [window("muse-assist:7d", "7d", 90, 115)]),
+   plan("google-antigravity", "Antigravity", [], subtitle: "Gemini", id: "antigravity-gemini"),
+   plan("google-antigravity", "Antigravity", [], subtitle: "Third-Party", id: "antigravity-third-party"),
+   plan("cursor", "Cursor", [window("cursor:subscription", "7d", 56, 118)]),
+   plan("grok-bot", "Grok Bot", [window("grok-bot:subscription", "7d", 56, 118)]),
+   plan("xai", "xAI", [window("xai:subscription", "7d", 56, 118)]),
+   plan("grok", "Grok", [window("grok:subscription", "7d", 56, 118)]),
+   plan("github-copilot", "GitHub Copilot", [window("copilot:1m", "1m", 0, 234)]),
+   plan("kimi", "Kimi", []),
+   plan("zai", "ZCode", [window("zcode:5h", "5h", 100, 4.5), window("zcode:7d", "7d", 90, 142)])
+  ]
+  precondition(rows.count == 14)
+  for width: CGFloat in [375, 393] {
+   let content = VStack(spacing: 0) {
+    ForEach(rows) { item in
+     CompanionQuotaRow(item: item, showSubtitle: item.title == "Antigravity")
+    }
+   }.padding(.horizontal, 12).frame(width: width).environment(\.colorScheme, .light)
+   let measure = ImageRenderer(content: content); measure.scale = 1
+   guard let allRows = measure.cgImage else { fatalError("phone rows did not render") }
+   precondition(allRows.height <= 710, "14 compact rows must fit within 710 points at default type")
+   let phone = VStack(spacing: 0) {
+    HStack {
+     Text("CodeCaps").font(.headline)
+     Spacer()
+     Text("14 Quotas").font(.caption).foregroundStyle(.secondary)
+     Image(systemName: "gearshape").padding(.leading, 8)
+    }.padding(.horizontal, 16).frame(height: 44)
+    Divider()
+    content.fixedSize(horizontal: false, vertical: true)
+     .frame(height: (width == 375 ? 667 : 852) - 45, alignment: .top).clipped()
+   }.frame(width: width, height: width == 375 ? 667 : 852)
+    .background(Color.white).environment(\.colorScheme, .light)
+   let renderer = ImageRenderer(content: phone); renderer.scale = 2
+   guard let image = renderer.cgImage else { fatalError("phone viewport did not render") }
+   let file = URL(fileURLWithPath: "\(ProcessInfo.processInfo.environment["CODECAPS_WIDGET_RENDER_DIR"] ?? NSTemporaryDirectory())/companion-\(Int(width))-light.png")
+   try NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!.write(to: file)
+   print("PASS: 14 actual companion rows at \(Int(width))pt use \(allRows.height)pt, viewport \(width == 375 ? 667 : 852)pt")
+  }
+  let accessible = CompanionQuotaRow(item: mini).padding(12).frame(width: 375)
+   .environment(\.dynamicTypeSize, .accessibility3).environment(\.colorScheme, .light).background(Color.white)
+  let renderer = ImageRenderer(content: accessible); renderer.scale = 2
+  guard let image = renderer.cgImage else { fatalError("accessible row did not render") }
+  try NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!.write(to:
+   URL(fileURLWithPath: "\(ProcessInfo.processInfo.environment["CODECAPS_WIDGET_RENDER_DIR"] ?? NSTemporaryDirectory())/companion-accessibility.png"))
+ }
  @MainActor static func main() async throws {
+  precondition(NSImage(named: NSImage.Name("provider-openai")) != nil, "provider marks must resolve in native fixtures")
   try await checkSemantics()
+  try renderPhoneRows()
   let now=Date()
   var platforms = [WidgetPlatformItem(id:"claude",providerKey:"anthropic",title:"Claude",subtitle:"",remainingPercent:85,resetAt:now.addingTimeInterval(12000),windows:[
    WidgetWindowItem(id:"claude-5h",label:"5-hour",cadence:"5h",remainingPercent:85,resetAt:now.addingTimeInterval(12000)),
