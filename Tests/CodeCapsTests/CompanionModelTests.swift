@@ -203,14 +203,75 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    private func hasPlatformAppGroups(_ source: String) throws -> Bool {
+        // Consume quoted literals before comments so URL and comment markers stay literal.
+        let tokens = try NSRegularExpression(pattern: #""(?:\\.|[^"\\])*"|/\*[\s\S]*?\*/|//[^\n]*"#)
+        let code = NSMutableString(string: source)
+        for match in tokens.matches(in: source, range: NSRange(source.startIndex..., in: source)).reversed() {
+            let token = (source as NSString).substring(with: match.range)
+            if token.hasPrefix("/") {
+                let blank = token.map { $0 == "\n" ? "\n" : " " }.joined()
+                code.replaceCharacters(in: match.range, with: blank)
+            }
+        }
+        let activeCode = code as String
+        let declaration = #"[ \t]*(?:public[ \t]+)?(?:nonisolated[ \t]+)?static[ \t]+let[ \t]+"#
+        func conditional(_ name: String) -> String {
+            #"(?m)^[ \t]*#if[ \t]+os\(macOS\)[ \t]*\n"# +
+            declaration + name + #"[ \t]*=[ \t]*"CC8UTF7ATG\.codecaps"[ \t]*\n"# +
+            #"[ \t]*#else[ \t]*\n"# +
+            declaration + name + #"[ \t]*=[ \t]*"group\.com\.simplewithus\.codecaps"[ \t]*\n"# +
+            #"[ \t]*#endif[ \t]*(?:\n|$)"#
+        }
+        func matches(_ pattern: String) throws -> Bool {
+            try NSRegularExpression(pattern: pattern).firstMatch(
+                in: activeCode, range: NSRange(activeCode.startIndex..., in: activeCode)
+            ) != nil
+        }
+        if try matches(conditional("appGroupId")) { return true }
+        let shared = conditional("codeCapsAppGroupId") + #"[ \t\r\n]*"# +
+            declaration + #"appGroupId[ \t]*=[ \t]*codeCapsAppGroupId[ \t]*(?:\n|$)"#
+        return try matches(shared)
+    }
+
     func testPlatformSpecificAppGroupIds() throws {
-        let source = try readCompanionModelSource()
-        XCTAssertTrue(
-            source.contains(#"appGroupId = "group.com.simplewithus.codecaps""#),
-            "iOS must use its registered App Group"
-        )
-        XCTAssertTrue(source.contains(#"appGroupId = "CC8UTF7ATG.codecaps""#))
-        XCTAssertTrue(source.contains("#if os(macOS)"))
+        XCTAssertTrue(try hasPlatformAppGroups(readCompanionModelSource()),
+                      "App Group IDs must match their macOS and iOS branches")
+    }
+
+    func testPlatformAppGroupContractRejectsMisleadingSource() throws {
+        let direct = """
+        #if os(macOS)
+        public static let appGroupId = "CC8UTF7ATG.codecaps"
+        #else
+        public static let appGroupId = "group.com.simplewithus.codecaps"
+        #endif
+        """
+        let shared = direct.replacingOccurrences(of: "appGroupId", with: "codeCapsAppGroupId") +
+            "\npublic static let appGroupId = codeCapsAppGroupId\n"
+        XCTAssertTrue(try hasPlatformAppGroups(direct))
+        XCTAssertTrue(try hasPlatformAppGroups(shared))
+        let literalMarkers = #"static let url = "https://example.invalid/*literal*/" // real comment"#
+        XCTAssertTrue(try hasPlatformAppGroups(literalMarkers + "\n" + shared))
+        XCTAssertTrue(try hasPlatformAppGroups(shared + "\n" + literalMarkers))
+        XCTAssertTrue(try hasPlatformAppGroups(shared.replacingOccurrences(
+            of: "#if os(macOS)", with: "#if os(macOS) // actual comment")))
+        XCTAssertTrue(try hasPlatformAppGroups(
+            #"static let open = "/*""# + "\n" + shared + "\n" + #"static let close = "*/""#))
+        let escapedQuote = #"static let quoted = "escaped \" // still a literal""#
+        XCTAssertTrue(try hasPlatformAppGroups(escapedQuote + "\n" + shared))
+
+        let swapped = shared.replacingOccurrences(of: "CC8UTF7ATG.codecaps", with: "temporary")
+            .replacingOccurrences(of: "group.com.simplewithus.codecaps", with: "CC8UTF7ATG.codecaps")
+            .replacingOccurrences(of: "temporary", with: "group.com.simplewithus.codecaps")
+        XCTAssertFalse(try hasPlatformAppGroups(swapped))
+        XCTAssertFalse(try hasPlatformAppGroups("/*\n" + shared + "\n*/"))
+        XCTAssertFalse(try hasPlatformAppGroups(shared.components(separatedBy: "\n")
+            .map { "// " + $0 }.joined(separator: "\n")))
+        XCTAssertFalse(try hasPlatformAppGroups(shared.replacingOccurrences(of: "#if os(macOS)", with: "")
+            .replacingOccurrences(of: "#else", with: "").replacingOccurrences(of: "#endif", with: "")))
+        XCTAssertFalse(try hasPlatformAppGroups(shared.replacingOccurrences(
+            of: "appGroupId = codeCapsAppGroupId", with: "appGroupId = otherConstant")))
     }
 
     func testSentenceGapInOutcomeMessages() throws {
