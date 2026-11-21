@@ -216,9 +216,9 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
         let thirdSection = QuotaPlatformSection(providerKey: "google-antigravity", providerLabel: "Antigravity", via: "antigravity", expected: true, windows: [QuotaWindowSnapshot(window: thirdPartyWindow, now: now)])
         let claudeSection = QuotaPlatformSection(providerKey: "anthropic", providerLabel: "Claude", via: nil, expected: true, windows: [QuotaWindowSnapshot(window: claudeWindow, now: now)])
 
-        let geminiRow = DisplaySection(id: "google-antigravity:gemini", providerKey: "google-antigravity", title: "Antigravity · Gemini", platformTitle: "Antigravity", section: geminiSection, poolKey: "gemini", remainingPercent: 71, resetAt: nil, maskedWindowIds: [])
-        let thirdRow = DisplaySection(id: "google-antigravity:third-party", providerKey: "google-antigravity", title: "Antigravity · Third-Party", platformTitle: "Antigravity", section: thirdSection, poolKey: "third-party", remainingPercent: 100, resetAt: nil, maskedWindowIds: [])
-        let claudeRow = DisplaySection(id: "anthropic", providerKey: "anthropic", title: "Claude", platformTitle: "Claude", section: claudeSection, poolKey: nil, remainingPercent: 1, resetAt: nil, maskedWindowIds: [])
+        let geminiRow = DisplaySection(id: "google-antigravity:gemini", providerKey: "google-antigravity", title: "Antigravity · Gemini", platformTitle: "Antigravity", section: geminiSection, poolKey: "gemini", remainingPercent: 71, resetAt: nil, maskedWindowIds: [], drivingWindowId: nil)
+        let thirdRow = DisplaySection(id: "google-antigravity:third-party", providerKey: "google-antigravity", title: "Antigravity · Third-Party", platformTitle: "Antigravity", section: thirdSection, poolKey: "third-party", remainingPercent: 100, resetAt: nil, maskedWindowIds: [], drivingWindowId: nil)
+        let claudeRow = DisplaySection(id: "anthropic", providerKey: "anthropic", title: "Claude", platformTitle: "Claude", section: claudeSection, poolKey: nil, remainingPercent: 1, resetAt: nil, maskedWindowIds: [], drivingWindowId: nil)
 
         // Inject anomaly targeting ONLY Gemini
         let geminiAnomaly = AnomalyDetector.Anomaly(providerKey: "google-antigravity", windowId: "gemini-5h", kind: .vsBaseline, multiplier: 3.7, summary: "Spending fast")
