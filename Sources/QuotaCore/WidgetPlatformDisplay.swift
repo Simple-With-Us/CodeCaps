@@ -318,6 +318,50 @@ public enum QuotaCardProjection {
             || weeklyLabels.contains(label) { return "weekly" }
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
             || fiveHourLabels.contains(label) { return "5h" }
+        // Pool copies from the antigravity-cli arrive without a window
+        // token:  the period lives only in the label ("Third-Party · 7-day
+        // window") or the model marker ("3p-weekly"), so exact matching
+        // never classifies them, and an unclassified pool row drops out of
+        // its card entirely - the Third-Party pool rendered empty on the
+        // phone while the Mac showed it.
+        let mt = (reading.modelType ?? "").lowercased()
+        let mid = (reading.modelId ?? "").lowercased()
+        // Only the Third-Party pool's own rows:  a Gemini copy that also
+        // lacks a token keeps its old classification, so this card never
+        // gains a row the Mac does not show.
+        guard label.hasPrefix("third-party") || mt.hasPrefix("3p-") || mid.hasPrefix("3p-") else { return nil }
+        // Exact tokens only: substring matching misclassifies canonical
+        // window labels (kody rule).  A leading "3p-" pool prefix is
+        // stripped so short markers ("3p-7d", "3p-5hr") classify like the
+        // long forms.
+        // Tokens stay grouped per field (kody):  a recombination that spans
+        // the label/modelType/modelId boundary is not a phrase.
+        let tokenFields = [label, mt, mid].map { field in
+            field.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "-" })
+                .map { $0.hasPrefix("3p-") ? String($0.dropFirst(3)) : String($0) }
+        }
+        // Catalogs mirror the exact-token lists above, short forms included
+        // (kody:  week, 10080m and 5hours complete the round-1 ask).
+        let weeklyTokens: Set<String> = ["weekly", "week", "7-day", "7d", "1w", "168h", "10080m"]
+        let fiveHourTokens: Set<String> = ["5h", "5-hour", "5hr", "5hours", "300m"]
+        // Space-separated phrases ("7 day", "5 hour") split into isolated
+        // tokens that miss the hyphenated catalog entries.  Recombine
+        // adjacent tokens with and without a hyphen so those labels
+        // classify the same way as "7-day" / "5-hour" / "5hr".
+        func matches(_ catalog: Set<String>) -> Bool {
+            for tokens in tokenFields {
+                if tokens.contains(where: catalog.contains) { return true }
+                guard tokens.count >= 2 else { continue }
+                for i in 0..<(tokens.count - 1) {
+                    let hyphenated = tokens[i] + "-" + tokens[i + 1]
+                    let glued = tokens[i] + tokens[i + 1]
+                    if catalog.contains(hyphenated) || catalog.contains(glued) { return true }
+                }
+            }
+            return false
+        }
+        if matches(weeklyTokens) { return "weekly" }
+        if matches(fiveHourTokens) { return "5h" }
         return nil
     }
 

@@ -319,6 +319,50 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
         XCTAssertFalse(model.hasActiveRunawayAnomaly(for: DisplaySection.rows(for: otherPeriod, now: now)[0]))
     }
 
+    func testOwnProviderPoolRunawayFlameRequiresSameAllowance() {
+        let now = Date()
+        let model = makeModel()
+        let observedAt = ISO8601DateFormatter().string(from: now)
+        let resetAt = ISO8601DateFormatter().string(from: now.addingTimeInterval(3_600))
+        var cursorWindow = QuotaWindow(
+            id: UnifiedSubscriptionPool.canonicalWindowId(for: "cursor"),
+            provider: "Cursor", providerKey: "cursor", label: "Included plan",
+            remainingPercent: 40, resetAt: resetAt, window: "7d", occurredAt: observedAt,
+            source: "cursor-reader", accountKey: "cursor-account")
+        cursorWindow.sourceApp = "local-mac"
+        let cursorSection = QuotaPlatformSection(providerKey: "cursor", providerLabel: "Cursor", via: nil,
+                                                 expected: true,
+                                                 windows: [QuotaWindowSnapshot(window: cursorWindow, now: now)])
+        model.injectForTests(sections: [cursorSection], now: now)
+        model.injectLocalHistorySourceForTests([cursorWindow])
+        model.injectRunawayAnomaliesForTests([
+            .init(providerKey: "cursor", windowId: cursorWindow.id,
+                  kind: .vsBaseline, multiplier: 3.7, summary: "Spending fast")
+        ])
+
+        let sameRow = DisplaySection.rows(for: cursorSection, now: now)[0]
+        XCTAssertTrue(model.hasActiveRunawayAnomaly(for: sameRow),
+                      "the pool row holding the anomalous allowance must flame")
+
+        var otherAccount = cursorWindow
+        otherAccount.accountKey = "another-account"
+        let otherSection = QuotaPlatformSection(providerKey: "cursor", providerLabel: "Cursor", via: nil,
+                                                expected: true,
+                                                windows: [QuotaWindowSnapshot(window: otherAccount, now: now)])
+        let otherRow = DisplaySection.rows(for: otherSection, now: now)[0]
+        XCTAssertFalse(model.hasActiveRunawayAnomaly(for: otherRow),
+                       "a pool row on a different account is not the same allowance")
+
+        var otherPeriod = cursorWindow
+        otherPeriod.resetAt = ISO8601DateFormatter().string(from: now.addingTimeInterval(7_200))
+        let periodSection = QuotaPlatformSection(providerKey: "cursor", providerLabel: "Cursor", via: nil,
+                                                 expected: true,
+                                                 windows: [QuotaWindowSnapshot(window: otherPeriod, now: now)])
+        let periodRow = DisplaySection.rows(for: periodSection, now: now)[0]
+        XCTAssertFalse(model.hasActiveRunawayAnomaly(for: periodRow),
+                       "a pool row on a different reset period is not the same allowance")
+    }
+
     private func makeModel() -> MonitorModel {
         let model = MonitorModel(defaults: defaults, burnRateHistoryURL: historyURL)
         model.skipsSnapshotIOForTesting = true

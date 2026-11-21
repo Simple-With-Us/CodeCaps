@@ -1480,7 +1480,18 @@ final class MonitorModel: ObservableObject {
                 || anomaly.providerKey == row.id
                 || canonicalAnomaly == rowCanonical {
                 if row.isPool {
-                    return row.section.windows.contains { $0.window.id == anomaly.windowId }
+                    // Same account/reset gate as the non-pool path below:
+                    // an id-only match would flame this pool row for a
+                    // different account's or period's fast reading.  When
+                    // the anomaly's own window cannot be resolved here,
+                    // keep the legacy id match rather than guess.
+                    guard let sourceWindow = anomalyWindow(anomaly),
+                          isSharedPoolWindow(sourceWindow) else {
+                        return row.section.windows.contains { $0.window.id == anomaly.windowId }
+                    }
+                    return row.section.windows.contains {
+                        $0.window.id == anomaly.windowId && isSameSharedAllowance($0.window, sourceWindow)
+                    }
                 }
                 // Preserve the platform-level signal for ordinary provider
                 // windows.  Shared-pool anomalies must be backed by that same

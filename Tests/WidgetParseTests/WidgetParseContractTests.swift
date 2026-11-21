@@ -102,11 +102,102 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertNil(gemini.atCapWindow())
     }
 
+    /// The antigravity-cli's Third-Party pool rows carry no window token at
+    /// all:  the period lives only in the label ("Third-Party · 7-day
+    /// window") and the model marker ("3p-weekly").  Exact matching never
+    /// classified them, so both rows dropped out of the card and the phone
+    /// rendered an empty 3rd-Party row beside Gemini while the Mac showed
+    /// the pool.
+    func testAntigravityThirdPartyPoolWithoutWindowTokenStillRenders() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset5h = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let reset7d = ISO8601DateFormatter().string(from: Date().addingTimeInterval(5 * 86_400))
+        var fiveHour = wire("[\"producer\",\"Mac.Jays.Services\",\"3p-5h\"]", "google-antigravity", nil, 100,
+                            "Third-Party · 5-hour window", model: "3p-5h", source: "antigravity-usage",
+                            stamp: stamp, reset: reset5h)
+        fiveHour["modelType"] = "3p-5h"
+        fiveHour["via"] = "antigravity"
+        var weekly = wire("[\"producer\",\"Mac.Jays.Services\",\"3p-weekly\"]", "google-antigravity", nil, 100,
+                          "Third-Party · 7-day window", model: "3p-weekly", source: "antigravity-usage",
+                          stamp: stamp, reset: reset7d)
+        weekly["modelType"] = "3p-weekly"
+        weekly["via"] = "antigravity"
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": [fiveHour, weekly]]))
+        let thirdParty = try XCTUnwrap(parsed.first { $0.id == "antigravity-third-party" })
+        XCTAssertEqual(thirdParty.primaryWindows.map(\.cadenceToken), ["5h", "7d"],
+                       "both token-less pool rows classify: \(thirdParty.windows.map { $0.label })")
+        XCTAssertEqual(thirdParty.primaryWindows.map(\.remainingPercent), [100, 100])
+        XCTAssertEqual(thirdParty.remainingPercent, 100)
+    }
+
+    /// Short model markers classify too:  a pool row whose label carries no
+    /// window phrase still lands on its card through "3p-7d"/"3p-1w"/"3p-5hr"
+    /// markers, while a longer token that merely contains a window-looking
+    /// substring ("3p-15hrs") must not misclassify (kody: exact tokens,
+    /// never substring matching).
+    func testAntigravityThirdPartyShortMarkersAndSubstringGuard() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        func shortRow(_ marker: String, _ pct: Double) -> [String: Any] {
+            var w = wire("[\"producer\",\"Mac.Jays.Services\",\"" + marker + "\"]", "google-antigravity", nil, pct,
+                         "Third-Party", model: marker, source: "antigravity-usage",
+                         stamp: stamp, reset: reset)
+            w["modelType"] = marker
+            w["via"] = "antigravity"
+            return w
+        }
+        var spacedWeekly = shortRow("3p-x", 5)
+        spacedWeekly["label"] = "Third-Party \u{00B7} 7 day window"
+        var spacedFiveHour = shortRow("3p-y", 3)
+        spacedFiveHour["label"] = "Third-Party \u{00B7} 5 hour window"
+        var boundaryWeekly = shortRow("3p-day", 1)
+        boundaryWeekly["label"] = "Third-Party \u{00B7} version 7"
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": [shortRow("3p-7d", 80), shortRow("3p-1w", 70), shortRow("3p-5hr", 60), shortRow("3p-15hrs", 1), spacedWeekly, spacedFiveHour, boundaryWeekly]]))
+        let thirdParty = try XCTUnwrap(parsed.first { $0.id == "antigravity-third-party" })
+        XCTAssertEqual(thirdParty.primaryWindows.map(\.cadenceToken), ["5h", "7d"],
+                       "short markers classify and the 15hrs impostor stays out: \(thirdParty.windows.map { $0.label })")
+        // Most-urgent picks the lowest remaining:  the spaced rows at 5/3 win
+        // ONLY if the space-separated labels classify, and the 15hrs impostor
+        // at 1 wins the 7d slot if it wrongly classifies.  The boundary row
+        // ("version 7" label + "3p-day" marker, also at 1) steals the 7d slot
+        // only if a recombination spans the field boundary (kody).
+        XCTAssertEqual(thirdParty.primaryWindows.map(\.remainingPercent), [3, 5],
+                       "space-separated 7 day / 5 hour labels classify;  15hrs impostor stays out")
+    }
+
     /// The Cursor row through the real widget parse path.
     ///
     /// Cursor has only the seven-day pool quota now (owner ruling 2026-11-09),
     /// so the widget reads it exactly as the Mac and the phone do:  one weekly
     /// meter, and no money meter standing in for a quota.
+
+    /// Space-separated window phrases ("7 day", "5 hour") must classify the
+    /// same way as the hyphenated forms.  Token-splitting would otherwise
+    /// drop those rows from the Third-Party card (kody, PR #539).
+    func testAntigravityThirdPartySpaceSeparatedWindowPhrases() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset5h = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let reset7d = ISO8601DateFormatter().string(from: Date().addingTimeInterval(5 * 86_400))
+        func poolRow(_ label: String, _ marker: String, _ pct: Double, reset: String) -> [String: Any] {
+            var w = wire("[\"producer\",\"Mac.Jays.Services\",\"" + marker + "\"]", "google-antigravity", nil, pct,
+                         label, model: marker, source: "antigravity-usage",
+                         stamp: stamp, reset: reset)
+            w["modelType"] = marker
+            w["via"] = "antigravity"
+            return w
+        }
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": [
+                poolRow("Third-Party · 5 hour window", "3p-pool", 60, reset: reset5h),
+                poolRow("Third-Party · 7 day window", "3p-pool", 80, reset: reset7d),
+            ]]))
+        let thirdParty = try XCTUnwrap(parsed.first { $0.id == "antigravity-third-party" })
+        XCTAssertEqual(thirdParty.primaryWindows.map(\.cadenceToken), ["5h", "7d"],
+                       "space-separated phrases classify: \(thirdParty.windows.map { $0.label })")
+    }
+
     func testTheCursorRowIsOneWeeklyMeterAndNoMoneyMeter() throws {
         let iso = ISO8601DateFormatter()
         let stamp = iso.string(from: Date())
