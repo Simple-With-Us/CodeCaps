@@ -164,7 +164,13 @@ import AppIntents
    try NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!.write(to: file)
    print("PASS: 14 actual companion rows at \(Int(width))pt use \(allRows.height)pt, viewport \(width == 375 ? 667 : 852)pt")
   }
-  let accessible = CompanionQuotaRow(item: mini).padding(12).frame(width: 375)
+  let cappedExtra = plan("muse-assist", "Muse Assist", [window("muse-assist:7d", "7d", 0, 42),
+   CompanionWindowItem(id: "muse-assist:extra", label: "Additional tokens", cadence: "Other limit",
+    remainingPercent: 81, resetAt: nil, reportedAt: now)])
+  let accessible = VStack(spacing: 8) {
+   CompanionQuotaRow(item: mini)
+   CompanionQuotaRow(item: cappedExtra)
+  }.padding(12).frame(width: 375)
    .environment(\.dynamicTypeSize, .accessibility3).environment(\.colorScheme, .light).background(Color.white)
   let renderer = ImageRenderer(content: accessible); renderer.scale = 2
   guard let image = renderer.cgImage else { fatalError("accessible row did not render") }
