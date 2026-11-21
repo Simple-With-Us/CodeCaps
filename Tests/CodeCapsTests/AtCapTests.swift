@@ -63,7 +63,7 @@ final class AtCapTests: XCTestCase {
             poolKey: nil,
             remainingPercent: windows.compactMap(\.remainingPercent).min(),
             resetAt: windows.compactMap(\.resetAt).min(),
-            maskedWindowIds: masked)
+            maskedWindowIds: masked, drivingWindowId: nil)
     }
 
     /// The owner's screenshot: Claude's 5-hour window full, its weekly spent.

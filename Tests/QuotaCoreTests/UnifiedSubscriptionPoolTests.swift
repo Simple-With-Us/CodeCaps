@@ -2,6 +2,18 @@ import XCTest
 @testable import QuotaCore
 
 final class UnifiedSubscriptionPoolTests: XCTestCase {
+    func testEquallyFreshNativeParticipantRowsSurviveResponseDeduplication() {
+        let grok = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 89)
+        let xai = makeWindow(providerKey: "xai", id: "grok:subscription", rem: 89)
+        let shared = UnifiedSubscriptionPool.share(windows: [grok, xai], now: now,
+            targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let sections = QuotaResponse(generatedAt: "", windows: shared).platformSections(now: now)
+        for provider in UnifiedSubscriptionPool.participantKeys {
+            XCTAssertEqual(sections.first { $0.providerKey == provider }?.windows.first?.remainingPercent, 89,
+                "an equally fresh native reading must not disappear from the participant row")
+        }
+    }
+
     private let iso = ISO8601DateFormatter()
     private let now = Date()
 
@@ -560,4 +572,41 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
                        "the donor keeps its own window and its own cadence")
     }
 
+
+    // MARK: - Pulled ids name the pool (CC-236)
+
+    /// The fleet wraps a pulled window's bucket in its producer's scope.  The
+    /// bucket still names the pool, so both producers' copies of the one xAI
+    /// pool are pool windows and carry one reading.
+    func testPulledProducerScopedIdsAreThePool() {
+        let phone = makeWindow(providerKey: "xai",
+                               id: "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"grok:subscription\"]",
+                               rem: 77, observedAgo: 60)
+        let mac = makeWindow(providerKey: "xai",
+                             id: "[\"producer\",\"Mac.Jays.Services\",\"xai:subscription\"]",
+                             rem: 75, observedAgo: 900)
+        XCTAssertEqual(UnifiedSubscriptionPool.bucketId(of: mac.id), "xai:subscription")
+        XCTAssertEqual(UnifiedSubscriptionPool.bucketId(of: "local-mac:xai:subscription"), "local-mac:xai:subscription")
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(phone))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(mac))
+        let notPool = makeWindow(providerKey: "xai",
+                                 id: "[\"producer\",\"Mac.Jays.Services\",\"xai:api-monthly\"]", rem: 12)
+        XCTAssertFalse(UnifiedSubscriptionPool.isPoolWindow(notPool))
+
+        let shared = UnifiedSubscriptionPool.share(windows: [phone, mac], now: now,
+                                                   targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let xai = shared.filter { $0.canonicalProviderKey == "xai" }
+        XCTAssertEqual(xai.count, 2, "both copies stay, so Settings can still rank their sources")
+        XCTAssertEqual(Set(xai.map(\.remainingPercent)), [77], "the fresher copy is the pool's one reading")
+    }
+
+    /// The Grok/xAI dedupe reads a pulled id's bucket the same way.
+    func testTheGrokXaiDedupeReadsPulledIds() {
+        let grok = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 40, observedAgo: 3600)
+        let xai = makeWindow(providerKey: "xai",
+                             id: "[\"producer\",\"Mac.Jays.Services\",\"xai:subscription\"]",
+                             rem: 70, observedAgo: 60)
+        let deduped = QuotaResponse.dedupedGrokSubscription([grok, xai])
+        XCTAssertEqual(deduped.map(\.id), [xai.id], "two reports of one pool are one row")
+    }
 }

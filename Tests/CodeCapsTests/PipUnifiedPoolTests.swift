@@ -38,7 +38,7 @@ final class PipUnifiedPoolTests: XCTestCase {
             remainingPercent: rem,
             resetAt: now.addingTimeInterval(resetIn),
             maskedWindowIds: []
-        )
+, drivingWindowId: nil)
     }
 
     func testPipWidgetXaiGetsReadingFromCursorPeer() {
@@ -107,7 +107,7 @@ final class PipUnifiedPoolTests: XCTestCase {
                                               windows: [QuotaWindowSnapshot(window: ownWindow, now: now)])
         let xaiRow = DisplaySection(id: "xai", providerKey: "xai", title: "xAI", platformTitle: "xAI",
                                     section: ownSection, poolKey: nil, remainingPercent: nil,
-                                    resetAt: nil, maskedWindowIds: [])
+                                    resetAt: nil, maskedWindowIds: [], drivingWindowId: nil)
         let cursorPeer = makeDisplaySection(providerKey: "cursor", windowId: "local-mac:cursor:plan",
                                             rem: 33.0, observedAgo: 20)
         let windows = PipWidgetController.currentWindows(for: xaiRow, now: now, peerRows: [cursorPeer])

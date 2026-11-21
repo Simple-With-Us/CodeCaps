@@ -822,15 +822,41 @@ public extension QuotaResponse {
         // the two collectors' own reports are still deduped.
         func isPool(_ window: QuotaWindow) -> Bool {
             guard window.sharedPoolOrigin == nil else { return false }
-            let parts = window.id.split(separator: ":")
-            guard parts.count >= 2 else { return false }
-            return parts[parts.count - 2] == Substring(window.canonicalProviderKey)
+            // A pulled id wraps the bucket in its producer's scope
+            // (`["producer","<id>","xai:subscription"]`); the bucket is what
+            // names the pool (CC-236).  The fleet also files the Grok
+            // credits payload under the xAI key with bucket
+            // `grok:subscription`, which `UnifiedSubscriptionPool.isPoolWindow`
+            // already accepts.  Comparing the bucket's provider segment to
+            // `canonicalProviderKey` missed that copy, so a local grok
+            // window and the fleet xAI copy of the same pool both survived.
+            guard UnifiedSubscriptionPool.isPoolWindow(window) else { return false }
+            return UnifiedSubscriptionPool.bucketId(of: window.id)
+                .split(separator: ":")
+                .last == "subscription"
+        }
+        // The fleet's filing of the Grok credits payload under the xAI key
+        // (bucket `grok:subscription`) is the xAI row's own live reading:
+        // this Mac reads no xAI quota itself.  It drops a staler local grok
+        // duplicate, but a local grok reading that is as fresh or fresher
+        // never drops it, or the xAI row is left with no reading at all a
+        // minute after the refresh filled it (FleetRowSourceTests, owner
+        // 2026-10-23).  The fleet's live reading wins over the file poll.
+        func isFleetGrokFiling(_ window: QuotaWindow) -> Bool {
+            guard window.canonicalProviderKey == "xai" else { return false }
+            let parts = UnifiedSubscriptionPool.bucketId(of: window.id).split(separator: ":")
+            return parts.count >= 2
+                && parts[parts.count - 2] == "grok"
                 && parts[parts.count - 1] == "subscription"
         }
-        guard let grokIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "grok" }),
-              let xaiIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "xai" })
+        guard let grokIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "grok" })
         else { return windows }
         let grokDate = windows[grokIndex].occurredDate ?? .distantPast
+        guard let xaiIndex = windows.firstIndex(where: {
+            isPool($0) && $0.canonicalProviderKey == "xai"
+                && !(isFleetGrokFiling($0) && ($0.occurredDate ?? .distantPast) <= grokDate)
+        })
+        else { return windows }
         let xaiDate = windows[xaiIndex].occurredDate ?? .distantPast
         var copy = windows
         copy.remove(at: grokDate >= xaiDate ? xaiIndex : grokIndex)

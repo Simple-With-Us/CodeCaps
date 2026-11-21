@@ -67,7 +67,7 @@ final class ProviderDetailsPresentationTests: XCTestCase {
         let section = QuotaPlatformSection(providerKey: "openai", providerLabel: "Codex", expected: true, windows: windows)
         let row = DisplaySection(id: "openai", providerKey: "openai", title: "Codex", platformTitle: "Codex",
                                  section: section, poolKey: nil, remainingPercent: 90, resetAt: nil,
-                                 maskedWindowIds: [])
+                                 maskedWindowIds: [], drivingWindowId: nil)
         let lines = glanceExpandedLines(for: row, now: now)
         XCTAssertEqual(Set(lines.map(\.label)), ["Spark", "Code Review", "Shared"])
         XCTAssertEqual(lines.filter { $0.label == "Shared" }.count, 2)

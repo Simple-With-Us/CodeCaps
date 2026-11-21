@@ -123,4 +123,47 @@ final class GrokXaiDedupeTests: XCTestCase {
         let result = QuotaResponse.dedupedGrokSubscription([filled, fleet])
         XCTAssertEqual(result.count, 2, "the pool's own rows must both survive")
     }
+
+    /// The fleet files the Grok credits payload under the xAI key with
+    /// bucket `grok:subscription`.  That copy is the same pool as the local
+    /// grok window, so the fresher reading survives and the staler duplicate
+    /// is dropped.
+    func testFleetGrokSubscriptionBucketUnderXaiIsDedupedWithLocalGrok() {
+        let windows = [
+            window(providerKey: "grok", id: "local-mac:grok:subscription", occurredAt: "2026-10-21T20:00:00Z"),
+            window(providerKey: "xai",
+                   id: "[\"producer\",\"Mac.Jays.Services\",\"grok:subscription\"]",
+                   occurredAt: "2026-10-22T01:00:00Z"),
+        ]
+        let result = QuotaResponse.dedupedGrokSubscription(windows)
+        XCTAssertEqual(result.map(\.id), [windows[1].id],
+                       "a grok:subscription bucket under xai is the same pool as the local grok window")
+    }
+
+    /// The fleet's grok:subscription filing under xAI is the xAI row's live
+    /// reading.  A local grok reading that is as fresh or fresher does not
+    /// drop it:  the fleet's live reading wins over the file poll.
+    func testAFresherOrTiedLocalGrokKeepsTheFleetsGrokFilingUnderXai() {
+        for occurredAt in ["2026-10-22T01:00:00Z", "2026-10-22T03:00:00Z"] {
+            let windows = [
+                window(providerKey: "grok", id: "local-mac:grok:subscription", occurredAt: "2026-10-22T03:00:00Z"),
+                window(providerKey: "xai", id: "grok:subscription", occurredAt: occurredAt),
+            ]
+            let result = QuotaResponse.dedupedGrokSubscription(windows)
+            XCTAssertEqual(result.map(\.id), windows.map(\.id),
+                           "the fleet's live xAI reading survives a local grok reading at \(occurredAt)")
+        }
+    }
+
+    /// Keeping the fleet's filing does not shield a stale xai:subscription
+    /// copy beside it:  that one is still the staler duplicate of the pool.
+    func testAKeptFleetFilingStillLetsTheStaleXaiCopyBeDeduped() {
+        let windows = [
+            window(providerKey: "grok", id: "local-mac:grok:subscription", occurredAt: "2026-10-22T03:00:00Z"),
+            window(providerKey: "xai", id: "grok:subscription", occurredAt: "2026-10-22T03:00:00Z"),
+            window(providerKey: "xai", id: "xai:subscription", occurredAt: "2026-10-21T22:02:00Z"),
+        ]
+        let result = QuotaResponse.dedupedGrokSubscription(windows)
+        XCTAssertEqual(result.map(\.id), ["local-mac:grok:subscription", "grok:subscription"])
+    }
 }

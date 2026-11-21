@@ -327,7 +327,7 @@ final class GlanceExpandedLineTests: XCTestCase {
             platformTitle: "Antigravity",
             section: QuotaPlatformSection(providerKey: "google-antigravity", providerLabel: "Antigravity",
                                           via: nil, expected: true, windows: windows),
-            poolKey: "gemini", remainingPercent: 0, resetAt: nil, maskedWindowIds: ["5h"])
+            poolKey: "gemini", remainingPercent: 0, resetAt: nil, maskedWindowIds: ["5h"], drivingWindowId: nil)
         XCTAssertTrue(glanceExpandedLines(for: masked, now: now).isEmpty)
     }
 
@@ -346,7 +346,7 @@ final class GlanceExpandedLineTests: XCTestCase {
                                             QuotaWindowSnapshot(window: geminiWeekly, now: now),
                                             QuotaWindowSnapshot(window: argonWindow, now: now),
                                           ]),
-            poolKey: "gemini", remainingPercent: 76, resetAt: now.addingTimeInterval(6 * 86_400), maskedWindowIds: [])
+            poolKey: "gemini", remainingPercent: 76, resetAt: now.addingTimeInterval(6 * 86_400), maskedWindowIds: [], drivingWindowId: nil)
 
         XCTAssertFalse(geminiRow.isAtCap, "Gemini row must not be marked at cap because Argon is at 0%")
         let pair = glanceMeterPair(for: geminiRow, now: now)
@@ -454,7 +454,7 @@ final class GlanceMeterTests: XCTestCase {
             poolKey: nil,
             remainingPercent: 10,
             resetAt: now.addingTimeInterval(86_400),
-            maskedWindowIds: [])
+            maskedWindowIds: [], drivingWindowId: nil)
     }
 
     func testMuseExtraBalanceRemainsUsableWhenWeeklyIsSpent() {
@@ -492,7 +492,7 @@ final class GlanceMeterTests: XCTestCase {
             poolKey: nil,
             remainingPercent: 11,
             resetAt: now.addingTimeInterval(4 * 86_400),
-            maskedWindowIds: [])
+            maskedWindowIds: [], drivingWindowId: nil)
         let pair = glanceMeterPair(for: row, now: now)
         XCTAssertEqual(pair.short?.window.id, "session")
         XCTAssertEqual(pair.long?.window.id, "weekly")
@@ -521,7 +521,7 @@ final class GlanceMeterTests: XCTestCase {
             poolKey: nil,
             remainingPercent: windows.compactMap(\.remainingPercent).min(),
             resetAt: windows.compactMap(\.resetAt).min(),
-            maskedWindowIds: masked)
+            maskedWindowIds: masked, drivingWindowId: nil)
     }
 
     // MARK: Layout
@@ -673,7 +673,7 @@ final class GlanceMeterTests: XCTestCase {
             section: QuotaPlatformSection(providerKey: "grok-bot", providerLabel: "Grok Bot", via: "cursor",
                                           expected: true, windows: windows),
             poolKey: nil, remainingPercent: windows.compactMap(\.remainingPercent).min(),
-            resetAt: windows.compactMap(\.resetAt).min(), maskedWindowIds: [])
+            resetAt: windows.compactMap(\.resetAt).min(), maskedWindowIds: [], drivingWindowId: nil)
     }
 
     func testAPlaceholderBesideAReadingIsNotDrawnAsAnEmptySecondBar() {
@@ -809,6 +809,89 @@ final class GlanceMeterTests: XCTestCase {
         let pair = glanceMeterPair(for: grokBotRow([dashboard, other]), now: now)
         XCTAssertEqual(pair.short?.window.id, other.window.id, "the one closer to its cap")
         XCTAssertEqual(pair.long?.window.id, dashboard.window.id)
+    }
+
+    // MARK: xAI's two 7d bars (CC-236)
+
+    private func xaiRow(_ windows: [QuotaWindowSnapshot]) -> DisplaySection {
+        DisplaySection(
+            id: "xai", providerKey: "xai", title: "xAI", platformTitle: "xAI",
+            section: QuotaPlatformSection(providerKey: "xai", providerLabel: "xAI", via: nil,
+                                          expected: true, windows: windows),
+            poolKey: nil, remainingPercent: windows.compactMap(\.remainingPercent).min(),
+            resetAt: windows.compactMap(\.resetAt).min(), maskedWindowIds: [], drivingWindowId: nil)
+    }
+
+    /// The owner's screenshot (2026-11-19):  the fleet hands the xAI row one
+    /// copy of the SuperGrok pool per producer, ids wrapped in the producer's
+    /// scope and no source on either, and the row drew "7d 75%" beside
+    /// "7d 77%".  Both are the one pool, so the row draws one 7d bar.
+    func testTwoProducersCopiesOfTheXaiPoolDrawOneSevenDayBar() {
+        let resetIn: TimeInterval = 5 * 86_400 + 23 * 3_600
+        let phone = makeWindow(id: "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"grok:subscription\"]",
+                               label: "1w window", token: "7d", remaining: 77, resetIn: resetIn, provider: "xai")
+        let mac = makeWindow(id: "[\"producer\",\"Mac.Jays.Services\",\"xai:subscription\"]",
+                             label: "weekly window", token: "weekly", remaining: 75, resetIn: resetIn,
+                             provider: "xai", observedAgo: 600)
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(phone.window))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(mac.window))
+        let row = xaiRow([phone, mac])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertNotNil(pair.short)
+        XCTAssertNil(pair.long, "one pool is one 7d bar, not one per producer")
+        XCTAssertTrue(glanceExpandedLines(for: row, now: now).isEmpty,
+                      "the second copy is not an extra line under the row either")
+    }
+
+    /// Pool identity alone is enough:  two producers' copies of the one
+    /// SuperGrok pool that have drifted further than `glanceSameAllowance`
+    /// (60 % against 77 %) are still one 7d bar, not two.
+    func testTwoProducersCopiesOfTheXaiPoolStillDrawOneBarWhenReadingsDrift() {
+        let resetIn: TimeInterval = 5 * 86_400 + 23 * 3_600
+        let phone = makeWindow(id: "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"grok:subscription\"]",
+                               label: "1w window", token: "7d", remaining: 77, resetIn: resetIn, provider: "xai")
+        let mac = makeWindow(id: "[\"producer\",\"Mac.Jays.Services\",\"xai:subscription\"]",
+                             label: "weekly window", token: "weekly", remaining: 60, resetIn: resetIn,
+                             provider: "xai", observedAgo: 600)
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(phone.window))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(mac.window))
+        let row = xaiRow([phone, mac])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertNotNil(pair.short)
+        XCTAssertNil(pair.long, "drifted readings of one pool are still one 7d bar")
+        XCTAssertTrue(glanceExpandedLines(for: row, now: now).isEmpty,
+                      "the drifted copy is not an extra line under the row either")
+    }
+
+    /// Pool identity does not collapse two accounts:  two SuperGrok pool
+    /// copies that name different account keys stay two meters, even when
+    /// their readings have drifted.
+    func testTwoAccountKeysOnTheXaiPoolStayTwoMeters() {
+        let resetIn: TimeInterval = 5 * 86_400 + 23 * 3_600
+        let first = makeWindow(id: "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"grok:subscription\"]",
+                               label: "1w window", token: "7d", remaining: 77, resetIn: resetIn,
+                               provider: "xai", accountKey: "a")
+        let second = makeWindow(id: "[\"producer\",\"Mac.Jays.Services\",\"xai:subscription\"]",
+                                label: "weekly window", token: "weekly", remaining: 60, resetIn: resetIn,
+                                provider: "xai", accountKey: "b")
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(first.window))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(second.window))
+        let pair = glanceMeterPair(for: xaiRow([first, second]), now: now)
+        XCTAssertNotNil(pair.short)
+        XCTAssertNotNil(pair.long, "different accounts of the pool stay two meters")
+    }
+
+    /// The pool rule does not swallow a window that is not the pool:  the
+    /// xAI API credits beside the pool are still their own meter.
+    func testTheXaiPoolRuleLeavesOtherXaiWindowsAlone() {
+        let resetIn: TimeInterval = 5 * 86_400 + 23 * 3_600
+        let pool = makeWindow(id: "[\"producer\",\"Mac.Jays.Services\",\"xai:subscription\"]",
+                              label: "weekly window", token: "weekly", remaining: 75, resetIn: resetIn, provider: "xai")
+        let other = makeWindow(id: "xai:weekly-other", label: "weekly window", token: "weekly", remaining: 75,
+                               resetIn: resetIn, provider: "xai")
+        XCTAssertFalse(UnifiedSubscriptionPool.isPoolWindow(other.window))
+        let pair = glanceMeterPair(for: xaiRow([pool, other]), now: now)
+        XCTAssertNotNil(pair.long, "a window outside the pool from the same source is still its own meter")
     }
 
     func testTwoAccountKeysAreTwoMeters() {
@@ -1151,7 +1234,7 @@ final class GlanceMeterTests: XCTestCase {
             poolKey: nil,
             remainingPercent: windows.compactMap(\.remainingPercent).min(),
             resetAt: windows.compactMap(\.resetAt).min(),
-            maskedWindowIds: [])
+            maskedWindowIds: [], drivingWindowId: nil)
     }
 
     /// Cursor has only the seven-day pool quota now, so its row reads like
@@ -1225,6 +1308,6 @@ final class GlanceMeterTests: XCTestCase {
             poolKey: "gemini",
             remainingPercent: windows.compactMap(\.remainingPercent).min(),
             resetAt: nil,
-            maskedWindowIds: masked)
+            maskedWindowIds: masked, drivingWindowId: nil)
     }
 }

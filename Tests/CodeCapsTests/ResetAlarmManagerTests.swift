@@ -276,7 +276,7 @@ final class ResetAlarmManagerTests: XCTestCase {
             title: "Antigravity · Third-Party", platformTitle: "Antigravity",
             section: QuotaPlatformSection(providerKey: "google-antigravity", providerLabel: "Antigravity",
                                           expected: true, windows: [five, weekly]),
-            poolKey: "third-party", remainingPercent: 0, resetAt: nil, maskedWindowIds: ["ag:tp:5h"])
+            poolKey: "third-party", remainingPercent: 0, resetAt: nil, maskedWindowIds: ["ag:tp:5h"], drivingWindowId: nil)
 
         let observations = resetAlarmObservations(for: row, scope: "local")
         XCTAssertEqual(observations.map(\.windowLabel), ["5h", "7d"])
