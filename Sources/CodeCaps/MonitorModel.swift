@@ -1146,6 +1146,7 @@ final class MonitorModel: ObservableObject {
                                                      via: row.section.via,
                                                      expected: row.section.expected,
                                                      windows: pairWindows)
+            let scopedMinPercent = windows.compactMap(\.remainingPercent).min()
             let scopedRow = DisplaySection(id: row.id,
                                            providerKey: row.providerKey,
                                            title: row.title,
@@ -1155,7 +1156,7 @@ final class MonitorModel: ObservableObject {
                                            remainingPercent: windows.compactMap(\.remainingPercent).min(),
                                            resetAt: windows.compactMap(\.resetAt).min(),
                                            maskedWindowIds: row.maskedWindowIds,
-                                           drivingWindowId: windows.first(where: { $0.remainingPercent == windows.compactMap(\.remainingPercent).min() })?.window.id)
+                                           drivingWindowId: scopedMinPercent.flatMap({ mp in windows.first(where: { $0.remainingPercent == mp })?.window.id }))
             let pair = glanceMeterPair(for: scopedRow, now: now)
             let selected: [QuotaWindowSnapshot]
             if let short = pair.short, let weekly = pair.long,

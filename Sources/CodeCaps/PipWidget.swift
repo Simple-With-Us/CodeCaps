@@ -737,7 +737,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                 via: row.section.via, expected: row.section.expected, windows: windows, iconHint: row.section.iconHint),
             poolKey: row.poolKey, remainingPercent: minPercent,
             resetAt: nil, maskedWindowIds: row.maskedWindowIds,
-            drivingWindowId: windows.first(where: { $0.remainingPercent == minPercent })?.window.id)
+            drivingWindowId: minPercent.flatMap({ mp in windows.first(where: { $0.remainingPercent == mp })?.window.id }))
         let meters = glanceMeterPair(for: current, now: now)
         var out: [QuotaWindowSnapshot] = []
         if let short = meters.short { out.append(short) }
