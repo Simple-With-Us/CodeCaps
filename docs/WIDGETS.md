@@ -63,7 +63,7 @@ The command exits 78 with an `unsupported-path:` line, and that result is not a 
 - The host is not macOS, or `xcrun`, `xcodebuild`, or `codesign` is missing.
 - A simulator is already booted.
 - No iOS 18 through 27 runtime is installed.
-- The App Group container cannot be resolved after install.
+- The App Group container cannot be resolved after install.  When `simctl` cannot report the container but the companion's launch hook proves `containerURL(forSecurityApplicationGroupIdentifier:)` resolved a path that exists inside the simulator's own App Group area, the script uses that verified companion-reported path and prints a `widget-homescreen: simctl never reported the App Group container` line;  the exit-78 refusal still applies when the companion reports nil, writes no marker, or names a path that fails verification.
 - The pinned gallery controls (Edit, Add Widget, the search field, CodeCaps, Done) are absent.
 
 A gallery that does not match that contract fails closed.  The script does not try a second path and does not retry.

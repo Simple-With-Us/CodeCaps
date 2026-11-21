@@ -38,11 +38,11 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
         }
         tap(edit)
 
-        guard let add = waitForControl(springboard, addWidgetLabel, timeout: 8) else {
+        guard let addWidget = waitForControl(springboard, addWidgetLabel, timeout: 8) else {
             XCTFail("unsupported-path: Add Widget control missing")
             return
         }
-        tap(add)
+        tap(addWidget)
 
         let search = springboard.searchFields.firstMatch
         guard search.waitForExistence(timeout: 8) else {
