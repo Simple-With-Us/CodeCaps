@@ -291,6 +291,13 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
                            "an independent xAI API anomaly must not fan out to \(key)")
         }
 
+        var unknownAccount = UnifiedSubscriptionPool.adapt(cursorWindow, for: "grok")
+        unknownAccount.accountKey = nil
+        let unknownAccountSection = QuotaPlatformSection(providerKey: "grok", providerLabel: "Grok", via: nil,
+                                                         expected: true,
+                                                         windows: [QuotaWindowSnapshot(window: unknownAccount, now: now)])
+        let unknownAccountRow = DisplaySection.rows(for: unknownAccountSection, now: now)[0]
+
         var differentAllowance = UnifiedSubscriptionPool.adapt(cursorWindow, for: "grok")
         differentAllowance.accountKey = "another-account"
         let differentSection = QuotaPlatformSection(providerKey: "grok", providerLabel: "Grok", via: nil,
@@ -303,6 +310,8 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
         ])
         XCTAssertFalse(model.hasActiveRunawayAnomaly(for: differentRow),
                        "a participant with a different account is not the same allowance")
+        XCTAssertTrue(model.hasActiveRunawayAnomaly(for: unknownAccountRow),
+                      "an unknown participant account does not conflict with the known source account")
         differentAllowance.accountKey = cursorWindow.accountKey
         differentAllowance.resetAt = ISO8601DateFormatter().string(from: now.addingTimeInterval(7_200))
         let otherPeriod = QuotaPlatformSection(providerKey: "grok", providerLabel: "Grok", via: nil,
