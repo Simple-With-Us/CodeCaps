@@ -46,6 +46,10 @@ from widget_homescreen_probe import (  # noqa: E402
     main,
     materialize_probe_project,
     outcome_code,
+    PROBE_LAUNCH_ARGS,
+    group_container_from_marker,
+    interpret_group_marker,
+    launch_argv,
     parse_created_udid,
     parse_data_container,
     parse_devices_listing,
@@ -512,6 +516,90 @@ class CommandPlanTests(unittest.TestCase):
         self.assertIn(f"-only-testing:{PINNED_UI_TEST}", argv)
         self.assertIn("simctl", screenshot_argv(UDID, Path("/tmp/home-screen.png"))[1])
         self.assertIn("screenshot", screenshot_argv(UDID, Path("/tmp/home-screen.png")))
+
+    def test_launch_argv_carries_probe_flag_on_a_fresh_process(self):
+        argv = launch_argv("UDID-1", "com.example.app")
+        self.assertEqual(argv[:4], ["xcrun", "simctl", "launch", "--terminate-running-process"])
+        self.assertEqual(argv[-2:], ["com.example.app", PROBE_LAUNCH_ARGS[0]])
+
+    def test_swift_hook_uses_the_same_probe_flag(self):
+        swift = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompanionApp.swift").read_text(encoding="utf-8")
+        self.assertIn(PROBE_LAUNCH_ARGS[0], swift)
+        self.assertIn("WidgetProbeHooks.touchGroupContainerIfRequested()", swift)
+
+    def test_swift_probe_uses_the_canonical_app_group_identifier(self):
+        group = read_app_group(WIDGET_ENTITLEMENTS)
+        model_src = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "Models" / "CompanionQuotaModel.swift").read_text(encoding="utf-8")
+        app_src = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompanionApp.swift").read_text(encoding="utf-8")
+        # The macOS/iOS split stays (CompanionModelTests pins the values).
+        self.assertIn("#if os(macOS)", model_src)
+        self.assertIn('"CC8UTF7ATG.codecaps"', model_src)
+        self.assertIn(f'"{group}"', model_src)
+        # One nonisolated alias exposes the model's identifier to the
+        # off-main-actor hook - never a second literal.
+        self.assertIn("nonisolated static let codeCapsAppGroupId =", model_src)
+        self.assertIn("public static let appGroupId = codeCapsAppGroupId", model_src)
+        self.assertIn("forSecurityApplicationGroupIdentifier: CompanionQuotaModel.codeCapsAppGroupId", app_src)
+        self.assertNotIn('forSecurityApplicationGroupIdentifier: "', app_src)
+
+    def test_interpret_group_marker_nil_proves_entitlement_refusal(self):
+        detail = interpret_group_marker("NIL")
+        self.assertIsNotNone(detail)
+        self.assertIn("nil", detail)
+
+    def test_interpret_group_marker_path_is_inconclusive(self):
+        self.assertIsNone(interpret_group_marker("/some/container/path"))
+
+    def test_interpret_group_marker_missing_is_inconclusive(self):
+        self.assertIsNone(interpret_group_marker(None))
+
+    def test_group_container_from_marker_rejects_nil_and_missing(self):
+        self.assertIsNone(group_container_from_marker("NIL", "UDID"))
+        self.assertIsNone(group_container_from_marker(None, "UDID"))
+
+    def test_group_container_from_marker_rejects_paths_outside_the_simulator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor = Path(tmp) / "AppGroup"
+            anchor.mkdir()
+            # An existing directory outside the anchor: only the containment
+            # check may reject it, never the later is_dir check.
+            self.assertIsNone(
+                group_container_from_marker(str(Path(tmp).parent), "UDID", anchor=anchor)
+            )
+
+    def test_group_container_from_marker_rejects_dotdot_escape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            anchor = (root / "sim" / "AppGroup").resolve()
+            anchor.mkdir(parents=True)
+            escaped = (root / "escaped")
+            escaped.mkdir()
+            # Resolves to root/escaped, which exists but sits outside anchor,
+            # so the containment guard (not a missing-directory check) rejects it.
+            escapee = anchor / ".." / ".." / "escaped"
+            self.assertTrue(escapee.resolve().is_dir())
+            self.assertIsNone(
+                group_container_from_marker(str(escapee), "UDID", anchor=anchor)
+            )
+
+    def test_group_container_from_marker_requires_an_existing_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor = Path(tmp) / "AppGroup"
+            anchor.mkdir()
+            missing = anchor / "DEADBEEF-0000-0000-0000-000000000000"
+            self.assertIsNone(
+                group_container_from_marker(str(missing), "UDID", anchor=anchor)
+            )
+
+    def test_group_container_from_marker_accepts_a_real_container(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor = Path(tmp) / "AppGroup"
+            container = anchor / "FCBF06D2-F193-45AA-BFE3-758F717C35FB"
+            container.mkdir(parents=True)
+            self.assertEqual(
+                group_container_from_marker(str(container), "UDID", anchor=anchor),
+                str(container.resolve()),
+            )
 
     def test_created_udid_parser(self):
         self.assertEqual(parse_created_udid(f"  {UDID.lower()}\n"), UDID.lower())

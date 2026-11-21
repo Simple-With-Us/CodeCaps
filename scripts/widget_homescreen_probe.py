@@ -59,6 +59,12 @@ PROBE_SOURCES = ROOT / "ios" / "WidgetHomeScreenProbe"
 COMPANION_YML = ROOT / "ios" / "CodeCapsCompanion" / "project.yml"
 COMPANION_PROJECT = ROOT / "ios" / "CodeCapsCompanion" / "CodeCapsCompanion.xcodeproj"
 APP_ENTITLEMENTS = ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompanion.entitlements"
+# Debug launch argument asking the companion to resolve the App Group container
+# at startup and record the outcome in its data container (see
+# CodeCapsCompanionApp.swift WidgetProbeHooks).  Lets the probe distinguish
+# "entitlement not honored" from "the app never asked".
+PROBE_LAUNCH_ARGS = ["-CCWidgetProbeTouchGroupContainer"]
+PROBE_GROUP_MARKER = "cc-widget-probe-group-container.txt"
 WIDGET_ENTITLEMENTS = (
     ROOT / "ios" / "CodeCapsCompanion" / "Widgets" / "CodeCapsWidgets.entitlements"
 )
@@ -1119,10 +1125,17 @@ LAUNCH_RETRY_SECONDS = 15
 SPRINGBOARD_NOT_READY = ("SBMainWorkspace", "FBSOpenApplicationServiceErrorDomain")
 
 
+def launch_argv(udid: str, app_bundle: str) -> list[str]:
+    # --terminate-running-process guarantees a fresh process: simctl launch on
+    # an already-running app returns the old pid and silently drops arguments,
+    # which would skip the probe hook in the companion.
+    return ["xcrun", "simctl", "launch", "--terminate-running-process", udid, app_bundle, *PROBE_LAUNCH_ARGS]
+
+
 def _launch(runner: ProcessRunner, udid: str, app_bundle: str) -> tuple[int, str]:
     code, output = 1, ""
     for attempt in range(1, LAUNCH_ATTEMPTS + 1):
-        code, output = runner.run(["xcrun", "simctl", "launch", udid, app_bundle], check=False)
+        code, output = runner.run(launch_argv(udid, app_bundle), check=False)
         if code == 0 or not any(marker in output for marker in SPRINGBOARD_NOT_READY):
             return code, output
         if attempt < LAUNCH_ATTEMPTS:
@@ -1156,6 +1169,89 @@ def _wait_for_group_container(
         + (f"\n{last[-500:]}" if last else ""),
         EXIT_UNSUPPORTED,
     )
+
+
+def _read_group_marker(runner: ProcessRunner, udid: str, app_bundle: str) -> tuple[str | None, str | None]:
+    """Read the companion debug marker saying whether containerURL resolved.
+
+    Returns (marker content, app data container path).  The marker is "NIL"
+    or the group container path, or None when the marker never appeared
+    (hook absent, app crashed, or container unreadable);  the data path is
+    None only when the data container lookup never succeeded.
+    """
+    data_seen = None
+    for _ in range(10):
+        code, output = runner.run(
+            ["xcrun", "simctl", "get_app_container", udid, app_bundle, "data"],
+            check=False,
+        )
+        if code == 0:
+            data = parse_data_container(output)
+            if data:
+                data_seen = data
+                marker = Path(data) / "Documents" / PROBE_GROUP_MARKER
+                try:
+                    text = marker.read_text(encoding="utf-8").strip()
+                except OSError:
+                    text = ""
+                if text:
+                    return text, data
+        time.sleep(0.5)
+    return None, data_seen
+
+
+def interpret_group_marker(marker: str | None) -> str | None:
+    """Explain a missing App Group container from the companion debug marker.
+
+    "NIL" proves the runtime refused the ad-hoc-signed App Group entitlement.
+    Any other content means containerURL resolved, so the container should
+    appear and the normal wait decides.  None is inconclusive.
+    """
+    if marker == "NIL":
+        return (
+            "companion reports containerURL(forSecurityApplicationGroupIdentifier:) "
+            "returned nil at launch: the ad-hoc-signed App Group entitlement was "
+            "not honored by this simulator runtime"
+        )
+    return None
+
+
+def group_container_from_marker(
+    marker: str | None,
+    udid: str,
+    anchor: Path | None = None,
+) -> str | None:
+    """Recover the App Group container from the companion launch-hook marker.
+
+    Hosted runners can leave ``simctl get_app_container`` blind to a group
+    container the runtime itself resolved:  the companion's
+    containerURL(forSecurityApplicationGroupIdentifier:) returned a real
+    path, yet the host lookup stays empty (observed on the v3 probe run,
+    job 134635720780).  Trust the marker only when it names an existing
+    directory inside this simulator's own AppGroup area;  anything else
+    keeps the honest refusal.
+    """
+    if not marker or marker == "NIL":
+        return None
+    candidate = Path(marker.splitlines()[0].strip())
+    if not candidate.is_absolute():
+        return None
+    if anchor is None:
+        anchor = (
+            Path.home()
+            / "Library/Developer/CoreSimulator/Devices"
+            / udid
+            / "data/Containers/Shared/AppGroup"
+        )
+    # Resolve both sides: a lexical parents check would wave through ".."
+    # segments and symlinks that escape the simulator's AppGroup area.
+    resolved_anchor = anchor.resolve()
+    resolved = candidate.resolve()
+    if resolved_anchor != resolved and resolved_anchor not in resolved.parents:
+        return None
+    if not resolved.is_dir():
+        return None
+    return str(resolved)
 
 
 def _wait_for_container(
@@ -1300,7 +1396,38 @@ def execute(host: Host, work: Path) -> int:
                 f"failed: companion did not launch\n{launch_out[-1000:]}",
                 EXIT_FAILED,
             )
-        group = _wait_for_group_container(runner, udid, app_bundle, app_group)
+        try:
+            group = _wait_for_group_container(runner, udid, app_bundle, app_group)
+        except ProbeFailure as exc:
+            # A marker-read timeout raises ProbeFailure(EXIT_FAILED); it must
+            # never replace the original unsupported-path refusal and exit 78.
+            try:
+                marker, data_container = _read_group_marker(runner, udid, app_bundle)
+            except ProbeFailure:
+                marker, data_container = None, None
+            # Anchor on the located data container
+            # (.../Containers/Data/Application/<UUID> -> .../Containers) so
+            # SIMULATOR_HOST_HOME layouts work;  the runner home is only the
+            # fallback when no data container was ever found.
+            anchor = None
+            if data_container:
+                parents = Path(data_container).parents
+                if len(parents) >= 3:
+                    anchor = parents[2] / "Shared" / "AppGroup"
+            recovered = group_container_from_marker(marker, udid, anchor=anchor)
+            if recovered:
+                print(
+                    "widget-homescreen: simctl never reported the App Group "
+                    "container; using the companion-reported path verified on "
+                    f"this simulator: {recovered}",
+                    flush=True,
+                )
+                group = recovered
+            else:
+                detail = interpret_group_marker(marker)
+                note = detail or f"probe launch-hook marker state: {marker!r}"
+                base = exc.args[0] if exc.args else str(exc)
+                raise ProbeFailure(f"{base}\nwidget-homescreen: {note}", EXIT_UNSUPPORTED) from exc
         app_data = _wait_for_container(
             runner,
             ["xcrun", "simctl", "get_app_container", udid, app_bundle, "data"],
