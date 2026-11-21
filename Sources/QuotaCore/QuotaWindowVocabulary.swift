@@ -6,6 +6,55 @@ import Foundation
 /// "Other limit").  The menu-bar popover keeps the owner-approved compact
 /// captions ("5h", "7d", "1m") via `popoverCaption`.
 public enum QuotaWindowVocabulary {
+    /// MiniMax's `general` / `coding_plan` interval is the coding-plan
+    /// allowance whose provider-defined cadence is five hours.  Some synced
+    /// and older wire rows mislabeled that interval as `1d`; use the model and
+    /// interval identity together to recover the provider cadence.  Video is
+    /// a separate daily allowance, and other MiniMax models keep their own
+    /// reported cadence.
+    public static func authoritativeWindowToken(
+        providerKey: String,
+        id: String,
+        modelId: String?,
+        label: String,
+        windowToken: String?,
+        windowKey: String? = nil
+    ) -> String? {
+        let provider = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard provider == "minimax" else { return windowToken }
+
+        let token = (windowToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard token == "1d" || token == "24h" || token == "daily" || token == oneDay else { return windowToken }
+
+        let model = (modelId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let idTokens = Set(id.lowercased()
+            .split { !$0.isLetter && !$0.isNumber && $0 != "_" && $0 != "-" }
+            .map(String.init))
+        let metadataTokens = Set((label + " " + (windowKey ?? "")).lowercased()
+            .split { !$0.isLetter && !$0.isNumber && $0 != "_" && $0 != "-" }
+            .map(String.init))
+        let knownCodingModels: Set<String> = ["general", "coding_plan", "coding-plan"]
+        let knownCodingBuckets: Set<String> = ["general", "coding_plan", "coding-plan"]
+
+        // A named non-coding model is authoritative.  Never let a generic
+        // caption such as "general quota" relabel a video or model-specific
+        // daily allowance.
+        if !model.isEmpty {
+            guard knownCodingModels.contains(model) else { return windowToken }
+        } else {
+            guard !idTokens.isDisjoint(with: knownCodingBuckets) else { return windowToken }
+        }
+        guard idTokens.isDisjoint(with: ["video", "hailuo"]),
+              metadataTokens.isDisjoint(with: ["video", "hailuo"]) else { return windowToken }
+
+        // Weekly rows may share the same `general` model and are explicitly
+        // distinguished by their cadence or label.  They must not be folded
+        // into the interval meter.
+        guard metadataTokens.isDisjoint(with: ["weekly", "week", "7d", "1w"]),
+              idTokens.isDisjoint(with: ["weekly", "week", "7d", "1w"]) else { return windowToken }
+        return fiveHour
+    }
+
     public static let fiveHour = "5-hour"
     public static let oneDay = "1-day"
     public static let sevenDay = "7-day"
