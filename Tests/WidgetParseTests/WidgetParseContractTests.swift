@@ -102,6 +102,35 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertNil(gemini.atCapWindow())
     }
 
+    /// The antigravity-cli's Third-Party pool rows carry no window token at
+    /// all:  the period lives only in the label ("Third-Party · 7-day
+    /// window") and the model marker ("3p-weekly").  Exact matching never
+    /// classified them, so both rows dropped out of the card and the phone
+    /// rendered an empty 3rd-Party row beside Gemini while the Mac showed
+    /// the pool.
+    func testAntigravityThirdPartyPoolWithoutWindowTokenStillRenders() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset5h = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let reset7d = ISO8601DateFormatter().string(from: Date().addingTimeInterval(5 * 86_400))
+        var fiveHour = wire("[\"producer\",\"Mac.Jays.Services\",\"3p-5h\"]", "google-antigravity", nil, 100,
+                            "Third-Party · 5-hour window", model: "3p-5h", source: "antigravity-usage",
+                            stamp: stamp, reset: reset5h)
+        fiveHour["modelType"] = "3p-5h"
+        fiveHour["via"] = "antigravity"
+        var weekly = wire("[\"producer\",\"Mac.Jays.Services\",\"3p-weekly\"]", "google-antigravity", nil, 100,
+                          "Third-Party · 7-day window", model: "3p-weekly", source: "antigravity-usage",
+                          stamp: stamp, reset: reset7d)
+        weekly["modelType"] = "3p-weekly"
+        weekly["via"] = "antigravity"
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": [fiveHour, weekly]]))
+        let thirdParty = try XCTUnwrap(parsed.first { $0.id == "antigravity-third-party" })
+        XCTAssertEqual(thirdParty.primaryWindows.map(\.cadenceToken), ["5h", "7d"],
+                       "both token-less pool rows classify: \(thirdParty.windows.map { $0.label })")
+        XCTAssertEqual(thirdParty.primaryWindows.map(\.remainingPercent), [100, 100])
+        XCTAssertEqual(thirdParty.remainingPercent, 100)
+    }
+
     /// The Cursor row through the real widget parse path.
     ///
     /// Cursor has only the seven-day pool quota now (owner ruling 2026-11-09),

@@ -318,6 +318,23 @@ public enum QuotaCardProjection {
             || weeklyLabels.contains(label) { return "weekly" }
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
             || fiveHourLabels.contains(label) { return "5h" }
+        // Pool copies from the antigravity-cli arrive without a window
+        // token:  the period lives only in the label ("Third-Party · 7-day
+        // window") or the model marker ("3p-weekly"), so exact matching
+        // never classifies them, and an unclassified pool row drops out of
+        // its card entirely - the Third-Party pool rendered empty on the
+        // phone while the Mac showed it.
+        let mt = (reading.modelType ?? "").lowercased()
+        let mid = (reading.modelId ?? "").lowercased()
+        // Only the Third-Party pool's own rows:  a Gemini copy that also
+        // lacks a token keeps its old classification, so this card never
+        // gains a row the Mac does not show.
+        guard label.hasPrefix("third-party") || mt.hasPrefix("3p-") || mid.hasPrefix("3p-") else { return nil }
+        let signals = [label, mt, mid].joined(separator: " ")
+        if signals.contains("weekly") || signals.contains("7-day") || signals.contains("7 day")
+            || signals.contains("168h") { return "weekly" }
+        if signals.contains("5h") || signals.contains("5-hour") || signals.contains("5 hour")
+            || signals.contains("300m") { return "5h" }
         return nil
     }
 

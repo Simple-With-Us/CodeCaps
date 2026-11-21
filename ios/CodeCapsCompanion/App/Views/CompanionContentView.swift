@@ -41,7 +41,7 @@ public struct CompanionContentView: View {
     public var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(spacing: 10) {
                     if let error = model.lastError {
                         errorBanner(error)
                     }
@@ -341,7 +341,7 @@ public struct CompanionContentView: View {
         }) : nil
         let shouldDimTitle = isAtCap && usableMuseExtra == nil
 
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 8) {
             // Main clickable row
             HStack(alignment: .center, spacing: 12) {
                 CompanionProviderLogo(item: item)
@@ -518,7 +518,7 @@ public struct CompanionContentView: View {
                 }
             }
         }
-        .padding(14)
+        .padding(12)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 14))
         .contentShape(Rectangle())
         .onTapGesture {

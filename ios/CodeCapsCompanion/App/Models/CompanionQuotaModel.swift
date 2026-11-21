@@ -1073,7 +1073,7 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     @Published public var items: [CompanionQuotaItem] = []
-    @Published public var sourceScope: CompanionSourceScope = .thisIPhone
+    @Published public var sourceScope: CompanionSourceScope = .allSources
     @Published public var isRefreshing: Bool = false
     @Published public var lastUpdated: Date?
     /// Last failure worth telling the owner about.
@@ -2673,6 +2673,26 @@ public final class CompanionQuotaModel: ObservableObject {
         }
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
             || fiveHourLabels.contains(label) {
+            return "5h"
+        }
+        // KEEP THIS FALLBACK IN SYNC with QuotaCardProjection.antigravityPeriod.
+        // antigravity-cli pool copies carry no window token:  the period
+        // lives in the label ("Third-Party · 7-day window") or the model
+        // marker ("3p-weekly"), and an unclassified pool row drops out of
+        // the card, leaving the Third-Party pool empty.
+        let mt = (w.modelType ?? "").lowercased()
+        let mid = (w.modelId ?? "").lowercased()
+        // Only the Third-Party pool's own rows:  a Gemini copy that also
+        // lacks a token keeps its old classification, so this card never
+        // gains a row the Mac does not show.
+        guard label.hasPrefix("third-party") || mt.hasPrefix("3p-") || mid.hasPrefix("3p-") else { return nil }
+        let signals = [label, mt, mid].joined(separator: " ")
+        if signals.contains("weekly") || signals.contains("7-day") || signals.contains("7 day")
+            || signals.contains("168h") {
+            return "weekly"
+        }
+        if signals.contains("5h") || signals.contains("5-hour") || signals.contains("5 hour")
+            || signals.contains("300m") {
             return "5h"
         }
         return nil
