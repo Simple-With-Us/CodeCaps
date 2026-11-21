@@ -1417,10 +1417,36 @@ private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
 /// And only a report of the same allowance counts (`glanceSameAllowance`): two
 /// accounts of one provider read by two sources, both labelled "Grok Bot
 /// weekly", are two meters.
+///
+/// Two reports of the unified subscription pool on one row are copies even
+/// when they name the same source, or none, and even when their readings
+/// have drifted apart:  the pool is one allowance by identity, and the
+/// fleet hands the xAI row one copy per producer with no source on either,
+/// which drew two 7d bars for the one SuperGrok pool (CC-236).  Different
+/// account keys still keep two allowances apart; only the reset and
+/// remaining-percent drift checks are skipped on the pool path.
 private func glanceIsCopy(_ snapshot: QuotaWindowSnapshot, of other: QuotaWindowSnapshot) -> Bool {
     glanceMeterKey(snapshot) == glanceMeterKey(other)
-        && (snapshot.window.source ?? "") != (other.window.source ?? "")
-        && glanceSameAllowance(snapshot, other)
+        && ((snapshot.window.source ?? "") != (other.window.source ?? "")
+            || glanceBothReportThePool(snapshot, other))
+        && glanceSameAccount(snapshot, other)
+        && (glanceBothReportThePool(snapshot, other)
+            || glanceSameAllowance(snapshot, other))
+}
+
+/// Whether two readings that both name an account name the same one.
+/// A fact one side leaves out cannot tell them apart, so it does not.
+private func glanceSameAccount(_ lhs: QuotaWindowSnapshot, _ rhs: QuotaWindowSnapshot) -> Bool {
+    if let left = lhs.window.accountKey, let right = rhs.window.accountKey, left != right { return false }
+    return true
+}
+
+/// Whether both windows are one participant's reports of the unified
+/// subscription pool (`UnifiedSubscriptionPool.isPoolWindow`).
+private func glanceBothReportThePool(_ lhs: QuotaWindowSnapshot, _ rhs: QuotaWindowSnapshot) -> Bool {
+    lhs.window.canonicalProviderKey == rhs.window.canonicalProviderKey
+        && UnifiedSubscriptionPool.isPoolWindow(lhs.window)
+        && UnifiedSubscriptionPool.isPoolWindow(rhs.window)
 }
 
 /// Whether two readings of one meter could be the same allowance read twice,
@@ -1429,7 +1455,7 @@ private func glanceIsCopy(_ snapshot: QuotaWindowSnapshot, of other: QuotaWindow
 /// is left, to within a point of drift between them.  A fact one side leaves
 /// out cannot tell them apart, so it does not.
 private func glanceSameAllowance(_ lhs: QuotaWindowSnapshot, _ rhs: QuotaWindowSnapshot) -> Bool {
-    if let left = lhs.window.accountKey, let right = rhs.window.accountKey, left != right { return false }
+    if !glanceSameAccount(lhs, rhs) { return false }
     if let left = lhs.resetAt, let right = rhs.resetAt, abs(left.timeIntervalSince(right)) > 120 { return false }
     if let left = lhs.remainingPercent, let right = rhs.remainingPercent, abs(left - right) > 2 { return false }
     return true
@@ -1977,6 +2003,10 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
         if let known = holders[key(snapshot)],
            !known.contains(where: { source($0) == source(snapshot) }),
            known.contains(where: { glanceSameAllowance($0, snapshot) }) { continue }
+        // A second report of the unified pool is the row's own number again,
+        // whatever source it names (CC-236).
+        if let known = holders[key(snapshot)],
+           known.contains(where: { glanceIsCopy(snapshot, of: $0) }) { continue }
         holders[key(snapshot), default: []].append(snapshot)
         rest.append(snapshot)
     }
