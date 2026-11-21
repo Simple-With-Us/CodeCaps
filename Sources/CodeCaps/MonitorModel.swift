@@ -1440,17 +1440,54 @@ final class MonitorModel: ObservableObject {
     /// Whether this platform or pool currently has an active runaway usage anomaly.
     func hasActiveRunawayAnomaly(for row: DisplaySection) -> Bool {
         let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        func isSharedPoolWindow(_ window: QuotaWindow) -> Bool {
+            !window.isSubModelLimit && UnifiedSubscriptionPool.isPoolWindow(window)
+        }
+        func anomalyWindow(_ anomaly: AnomalyDetector.Anomaly) -> QuotaWindow? {
+            localWindows.first {
+                $0.canonicalProviderKey == quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey)
+                    && $0.id == anomaly.windowId
+            } ?? sections.flatMap(\.windows).map(\.window).first {
+                $0.canonicalProviderKey == quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey)
+                    && $0.id == anomaly.windowId
+            }
+        }
+        func isSameSharedAllowance(_ lhs: QuotaWindow, _ rhs: QuotaWindow) -> Bool {
+            isSharedPoolWindow(lhs) && isSharedPoolWindow(rhs)
+                && lhs.resetDate == rhs.resetDate
+                && lhs.accountKey == rhs.accountKey
+        }
         return activeRunawayAnomalies.contains { anomaly in
             let canonicalAnomaly = quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey)
-            guard anomaly.providerKey == row.providerKey
+            if anomaly.providerKey == row.providerKey
                 || anomaly.providerKey == row.id
-                || canonicalAnomaly == rowCanonical else {
+                || canonicalAnomaly == rowCanonical {
+                if row.isPool {
+                    return row.section.windows.contains { $0.window.id == anomaly.windowId }
+                }
+                // Preserve the platform-level signal for ordinary provider
+                // windows.  Shared-pool anomalies must be backed by that same
+                // pool reading on this row, so an xAI API-only row stays clear.
+                guard let sourceWindow = anomalyWindow(anomaly),
+                      isSharedPoolWindow(sourceWindow) else {
+                    return true
+                }
+                return row.section.windows.contains {
+                    $0.window.id == anomaly.windowId && isSameSharedAllowance($0.window, sourceWindow)
+                }
+            }
+
+            // The unified subscription pool has four provider rows.  A fast
+            // reading in any one participant is the same reading shown by
+            // every other participant, so carry its flame across those rows.
+            // Keep this exact to the pool's canonical window IDs: an API
+            // meter or other independent provider window must not fan out.
+            guard UnifiedSubscriptionPool.participantKeys.contains(canonicalAnomaly),
+                  let sourceWindow = anomalyWindow(anomaly),
+                  isSharedPoolWindow(sourceWindow) else {
                 return false
             }
-            if row.isPool {
-                return row.section.windows.contains { $0.window.id == anomaly.windowId }
-            }
-            return true
+            return row.section.windows.contains { isSameSharedAllowance($0.window, sourceWindow) }
         }
     }
 
