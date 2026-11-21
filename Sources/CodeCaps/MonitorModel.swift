@@ -1439,18 +1439,25 @@ final class MonitorModel: ObservableObject {
 
     /// Whether this platform or pool currently has an active runaway usage anomaly.
     func hasActiveRunawayAnomaly(for row: DisplaySection) -> Bool {
+        guard !activeRunawayAnomalies.isEmpty else { return false }
         let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        struct WindowKey: Hashable { let provider: String; let id: String }
+        var windowsByKey: [WindowKey: QuotaWindow] = [:]
+        func index(_ window: QuotaWindow) {
+            let key = WindowKey(provider: window.canonicalProviderKey, id: window.id)
+            if windowsByKey[key] == nil { windowsByKey[key] = window }
+        }
+        for window in localWindows { index(window) }
+        for section in sections {
+            for snapshot in section.windows { index(snapshot.window) }
+        }
         func isSharedPoolWindow(_ window: QuotaWindow) -> Bool {
             !window.isSubModelLimit && UnifiedSubscriptionPool.isPoolWindow(window)
         }
         func anomalyWindow(_ anomaly: AnomalyDetector.Anomaly) -> QuotaWindow? {
-            localWindows.first {
-                $0.canonicalProviderKey == quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey)
-                    && $0.id == anomaly.windowId
-            } ?? sections.flatMap(\.windows).map(\.window).first {
-                $0.canonicalProviderKey == quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey)
-                    && $0.id == anomaly.windowId
-            }
+            windowsByKey[WindowKey(
+                provider: quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey),
+                id: anomaly.windowId)]
         }
         func isSameSharedAllowance(_ lhs: QuotaWindow, _ rhs: QuotaWindow) -> Bool {
             isSharedPoolWindow(lhs) && isSharedPoolWindow(rhs)
@@ -3193,7 +3200,7 @@ final class MonitorModel: ObservableObject {
         // Fleet-fallback windows already sit in `merged`, and the caller also
         // appends every fleet group.  The widget cache stores this array
         // verbatim, so an equal window is published once.
-        var seen: [QuotaWindow] = []
+        var readingsByKey: [String: [QuotaWindow]] = [:]
         let unique = publishable.filter { window in
             // The pool annotates a participant before the raw fleet copy is
             // appended.  That provenance annotation does not create another
@@ -3201,8 +3208,9 @@ final class MonitorModel: ObservableObject {
             // first (pool-projected) window with its provenance intact.
             var readingIdentity = window
             readingIdentity.sharedPoolOrigin = nil
-            if seen.contains(readingIdentity) { return false }
-            seen.append(readingIdentity)
+            let key = window.id + "\u{1F}" + window.provider + "\u{1F}" + window.label
+            if readingsByKey[key]?.contains(readingIdentity) == true { return false }
+            readingsByKey[key, default: []].append(readingIdentity)
             return true
         }
         let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: unique)
