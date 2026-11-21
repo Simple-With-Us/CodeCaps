@@ -863,6 +863,24 @@ final class GlanceMeterTests: XCTestCase {
                       "the drifted copy is not an extra line under the row either")
     }
 
+    /// Pool identity does not collapse two accounts:  two SuperGrok pool
+    /// copies that name different account keys stay two meters, even when
+    /// their readings have drifted.
+    func testTwoAccountKeysOnTheXaiPoolStayTwoMeters() {
+        let resetIn: TimeInterval = 5 * 86_400 + 23 * 3_600
+        let first = makeWindow(id: "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"grok:subscription\"]",
+                               label: "1w window", token: "7d", remaining: 77, resetIn: resetIn,
+                               provider: "xai", accountKey: "a")
+        let second = makeWindow(id: "[\"producer\",\"Mac.Jays.Services\",\"xai:subscription\"]",
+                                label: "weekly window", token: "weekly", remaining: 60, resetIn: resetIn,
+                                provider: "xai", accountKey: "b")
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(first.window))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(second.window))
+        let pair = glanceMeterPair(for: xaiRow([first, second]), now: now)
+        XCTAssertNotNil(pair.short)
+        XCTAssertNotNil(pair.long, "different accounts of the pool stay two meters")
+    }
+
     /// The pool rule does not swallow a window that is not the pool:  the
     /// xAI API credits beside the pool are still their own meter.
     func testTheXaiPoolRuleLeavesOtherXaiWindowsAlone() {

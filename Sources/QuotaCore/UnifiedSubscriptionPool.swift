@@ -347,6 +347,12 @@ public enum UnifiedSubscriptionPool {
     /// `…xai` / `subscription"]`, so no pulled copy of the pool was ever the
     /// pool:  two producers' copies of the one xAI pool were both drawn on
     /// the xAI row as two 7d bars (CC-236).  Any other id is returned as is.
+    ///
+    /// This is a parser, not a validator:  the last element is returned
+    /// unvalidated, including a `grok:subscription` bucket on an xAI
+    /// window (the fleet files the Grok credits payload under the xAI
+    /// key).  Callers must validate the identity against the provider-keyed
+    /// canonical set, as `isPoolWindow` already does.
     static func bucketId(of id: String) -> String {
         guard id.first == "[",
               let elements = try? JSONDecoder().decode([String].self, from: Data(id.utf8)),

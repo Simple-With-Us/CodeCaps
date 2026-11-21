@@ -1422,13 +1422,23 @@ private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
 /// when they name the same source, or none, and even when their readings
 /// have drifted apart:  the pool is one allowance by identity, and the
 /// fleet hands the xAI row one copy per producer with no source on either,
-/// which drew two 7d bars for the one SuperGrok pool (CC-236).
+/// which drew two 7d bars for the one SuperGrok pool (CC-236).  Different
+/// account keys still keep two allowances apart; only the reset and
+/// remaining-percent drift checks are skipped on the pool path.
 private func glanceIsCopy(_ snapshot: QuotaWindowSnapshot, of other: QuotaWindowSnapshot) -> Bool {
     glanceMeterKey(snapshot) == glanceMeterKey(other)
         && ((snapshot.window.source ?? "") != (other.window.source ?? "")
             || glanceBothReportThePool(snapshot, other))
+        && glanceSameAccount(snapshot, other)
         && (glanceBothReportThePool(snapshot, other)
             || glanceSameAllowance(snapshot, other))
+}
+
+/// Whether two readings that both name an account name the same one.
+/// A fact one side leaves out cannot tell them apart, so it does not.
+private func glanceSameAccount(_ lhs: QuotaWindowSnapshot, _ rhs: QuotaWindowSnapshot) -> Bool {
+    if let left = lhs.window.accountKey, let right = rhs.window.accountKey, left != right { return false }
+    return true
 }
 
 /// Whether both windows are one participant's reports of the unified
@@ -1445,7 +1455,7 @@ private func glanceBothReportThePool(_ lhs: QuotaWindowSnapshot, _ rhs: QuotaWin
 /// is left, to within a point of drift between them.  A fact one side leaves
 /// out cannot tell them apart, so it does not.
 private func glanceSameAllowance(_ lhs: QuotaWindowSnapshot, _ rhs: QuotaWindowSnapshot) -> Bool {
-    if let left = lhs.window.accountKey, let right = rhs.window.accountKey, left != right { return false }
+    if !glanceSameAccount(lhs, rhs) { return false }
     if let left = lhs.resetAt, let right = rhs.resetAt, abs(left.timeIntervalSince(right)) > 120 { return false }
     if let left = lhs.remainingPercent, let right = rhs.remainingPercent, abs(left - right) > 2 { return false }
     return true
