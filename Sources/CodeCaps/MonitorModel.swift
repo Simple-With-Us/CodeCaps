@@ -971,8 +971,18 @@ final class MonitorModel: ObservableObject {
         // sides in that same form while retaining account and machine provenance.
         let local = QuotaResponse(generatedAt: "", windows: localWindows).platformSections(now: now)
             .flatMap { $0.windows.map(\.window) }
+            .map { window -> QuotaWindow in
+                var copy = window
+                copy.sharedPoolOrigin = nil
+                return copy
+            }
         let selected = QuotaResponse(generatedAt: "", windows: row.section.windows.map(\.window))
             .normalized().windows
+            .map { window -> QuotaWindow in
+                var copy = window
+                copy.sharedPoolOrigin = nil
+                return copy
+            }
         return !selected.isEmpty && selected.allSatisfy { local.contains($0) }
     }
 
@@ -1462,7 +1472,7 @@ final class MonitorModel: ObservableObject {
         func isSameSharedAllowance(_ lhs: QuotaWindow, _ rhs: QuotaWindow) -> Bool {
             isSharedPoolWindow(lhs) && isSharedPoolWindow(rhs)
                 && lhs.resetDate == rhs.resetDate
-                && lhs.accountKey == rhs.accountKey
+                && (lhs.accountKey == nil || rhs.accountKey == nil || lhs.accountKey == rhs.accountKey)
         }
         return activeRunawayAnomalies.contains { anomaly in
             let canonicalAnomaly = quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey)
@@ -3200,12 +3210,25 @@ final class MonitorModel: ObservableObject {
         // Fleet-fallback windows already sit in `merged`, and the caller also
         // appends every fleet group.  The widget cache stores this array
         // verbatim, so an equal window is published once.
+        struct SharedPoolWidgetIdentity: Hashable {
+            let providerKey: String
+            let accountKey: String?
+            let resetDate: Date?
+        }
+        var poolReadings = Set<SharedPoolWidgetIdentity>()
         var readingsByKey: [String: [QuotaWindow]] = [:]
         let unique = publishable.filter { window in
+            if !window.isSubModelLimit && UnifiedSubscriptionPool.isPoolWindow(window) {
+                let identity = SharedPoolWidgetIdentity(
+                    providerKey: window.canonicalProviderKey,
+                    accountKey: window.accountKey,
+                    resetDate: window.resetDate)
+                return poolReadings.insert(identity).inserted
+            }
             // The pool annotates a participant before the raw fleet copy is
-            // appended.  That provenance annotation does not create another
-            // reading: merge only otherwise-identical copies and retain the
-            // first (pool-projected) window with its provenance intact.
+            // appended.  For other windows, that annotation does not create
+            // another reading: merge otherwise-identical copies while
+            // retaining the first window with its provenance intact.
             var readingIdentity = window
             readingIdentity.sharedPoolOrigin = nil
             let key = window.id + "\u{1F}" + window.provider + "\u{1F}" + window.label
