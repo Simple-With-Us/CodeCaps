@@ -123,4 +123,20 @@ final class GrokXaiDedupeTests: XCTestCase {
         let result = QuotaResponse.dedupedGrokSubscription([filled, fleet])
         XCTAssertEqual(result.count, 2, "the pool's own rows must both survive")
     }
+
+    /// The fleet files the Grok credits payload under the xAI key with
+    /// bucket `grok:subscription`.  That copy is the same pool as the local
+    /// grok window, so the fresher reading survives and the staler duplicate
+    /// is dropped.
+    func testFleetGrokSubscriptionBucketUnderXaiIsDedupedWithLocalGrok() {
+        let windows = [
+            window(providerKey: "grok", id: "local-mac:grok:subscription", occurredAt: "2026-10-21T20:00:00Z"),
+            window(providerKey: "xai",
+                   id: "[\"producer\",\"Mac.Jays.Services\",\"grok:subscription\"]",
+                   occurredAt: "2026-10-22T01:00:00Z"),
+        ]
+        let result = QuotaResponse.dedupedGrokSubscription(windows)
+        XCTAssertEqual(result.map(\.id), [windows[1].id],
+                       "a grok:subscription bucket under xai is the same pool as the local grok window")
+    }
 }

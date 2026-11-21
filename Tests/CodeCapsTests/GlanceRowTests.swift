@@ -843,6 +843,26 @@ final class GlanceMeterTests: XCTestCase {
                       "the second copy is not an extra line under the row either")
     }
 
+    /// Pool identity alone is enough:  two producers' copies of the one
+    /// SuperGrok pool that have drifted further than `glanceSameAllowance`
+    /// (60 % against 77 %) are still one 7d bar, not two.
+    func testTwoProducersCopiesOfTheXaiPoolStillDrawOneBarWhenReadingsDrift() {
+        let resetIn: TimeInterval = 5 * 86_400 + 23 * 3_600
+        let phone = makeWindow(id: "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"grok:subscription\"]",
+                               label: "1w window", token: "7d", remaining: 77, resetIn: resetIn, provider: "xai")
+        let mac = makeWindow(id: "[\"producer\",\"Mac.Jays.Services\",\"xai:subscription\"]",
+                             label: "weekly window", token: "weekly", remaining: 60, resetIn: resetIn,
+                             provider: "xai", observedAgo: 600)
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(phone.window))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(mac.window))
+        let row = xaiRow([phone, mac])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertNotNil(pair.short)
+        XCTAssertNil(pair.long, "drifted readings of one pool are still one 7d bar")
+        XCTAssertTrue(glanceExpandedLines(for: row, now: now).isEmpty,
+                      "the drifted copy is not an extra line under the row either")
+    }
+
     /// The pool rule does not swallow a window that is not the pool:  the
     /// xAI API credits beside the pool are still their own meter.
     func testTheXaiPoolRuleLeavesOtherXaiWindowsAlone() {

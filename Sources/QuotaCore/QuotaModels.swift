@@ -824,11 +824,16 @@ public extension QuotaResponse {
             guard window.sharedPoolOrigin == nil else { return false }
             // A pulled id wraps the bucket in its producer's scope
             // (`["producer","<id>","xai:subscription"]`); the bucket is what
-            // names the pool (CC-236).
-            let parts = UnifiedSubscriptionPool.bucketId(of: window.id).split(separator: ":")
-            guard parts.count >= 2 else { return false }
-            return parts[parts.count - 2] == Substring(window.canonicalProviderKey)
-                && parts[parts.count - 1] == "subscription"
+            // names the pool (CC-236).  The fleet also files the Grok
+            // credits payload under the xAI key with bucket
+            // `grok:subscription`, which `UnifiedSubscriptionPool.isPoolWindow`
+            // already accepts.  Comparing the bucket's provider segment to
+            // `canonicalProviderKey` missed that copy, so a local grok
+            // window and the fleet xAI copy of the same pool both survived.
+            guard UnifiedSubscriptionPool.isPoolWindow(window) else { return false }
+            return UnifiedSubscriptionPool.bucketId(of: window.id)
+                .split(separator: ":")
+                .last == "subscription"
         }
         guard let grokIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "grok" }),
               let xaiIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "xai" })

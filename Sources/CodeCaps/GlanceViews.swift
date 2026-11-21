@@ -1419,15 +1419,16 @@ private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
 /// weekly", are two meters.
 ///
 /// Two reports of the unified subscription pool on one row are copies even
-/// when they name the same source, or none:  the pool is one allowance by
-/// identity, and the fleet hands the xAI row one copy per producer with no
-/// source on either, which drew two 7d bars for the one SuperGrok pool
-/// (CC-236).
+/// when they name the same source, or none, and even when their readings
+/// have drifted apart:  the pool is one allowance by identity, and the
+/// fleet hands the xAI row one copy per producer with no source on either,
+/// which drew two 7d bars for the one SuperGrok pool (CC-236).
 private func glanceIsCopy(_ snapshot: QuotaWindowSnapshot, of other: QuotaWindowSnapshot) -> Bool {
     glanceMeterKey(snapshot) == glanceMeterKey(other)
         && ((snapshot.window.source ?? "") != (other.window.source ?? "")
             || glanceBothReportThePool(snapshot, other))
-        && glanceSameAllowance(snapshot, other)
+        && (glanceBothReportThePool(snapshot, other)
+            || glanceSameAllowance(snapshot, other))
 }
 
 /// Whether both windows are one participant's reports of the unified
