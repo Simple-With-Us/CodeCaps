@@ -2690,7 +2690,9 @@ public final class CompanionQuotaModel: ObservableObject {
         // window labels (kody rule).  A leading "3p-" pool prefix is
         // stripped so short markers ("3p-7d", "3p-5hr") classify like the
         // long forms.
-        let tokens = [label, mt, mid].flatMap { field in
+        // Tokens stay grouped per field (kody):  a recombination that spans
+        // the label/modelType/modelId boundary is not a phrase.
+        let tokenFields = [label, mt, mid].map { field in
             field.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "-" })
                 .map { $0.hasPrefix("3p-") ? String($0.dropFirst(3)) : String($0) }
         }
@@ -2703,12 +2705,14 @@ public final class CompanionQuotaModel: ObservableObject {
         // adjacent tokens with and without a hyphen so those labels
         // classify the same way as "7-day" / "5-hour" / "5hr".
         func matches(_ catalog: Set<String>) -> Bool {
-            if tokens.contains(where: catalog.contains) { return true }
-            guard tokens.count >= 2 else { return false }
-            for i in 0..<(tokens.count - 1) {
-                let hyphenated = tokens[i] + "-" + tokens[i + 1]
-                let glued = tokens[i] + tokens[i + 1]
-                if catalog.contains(hyphenated) || catalog.contains(glued) { return true }
+            for tokens in tokenFields {
+                if tokens.contains(where: catalog.contains) { return true }
+                guard tokens.count >= 2 else { continue }
+                for i in 0..<(tokens.count - 1) {
+                    let hyphenated = tokens[i] + "-" + tokens[i + 1]
+                    let glued = tokens[i] + tokens[i + 1]
+                    if catalog.contains(hyphenated) || catalog.contains(glued) { return true }
+                }
             }
             return false
         }

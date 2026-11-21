@@ -151,14 +151,18 @@ final class WidgetParseContractTests: XCTestCase {
         spacedWeekly["label"] = "Third-Party \u{00B7} 7 day window"
         var spacedFiveHour = shortRow("3p-y", 3)
         spacedFiveHour["label"] = "Third-Party \u{00B7} 5 hour window"
+        var boundaryWeekly = shortRow("3p-day", 1)
+        boundaryWeekly["label"] = "Third-Party \u{00B7} version 7"
         let parsed = WidgetPresentation.parseSnapshot(
-            data: try JSONSerialization.data(withJSONObject: ["windows": [shortRow("3p-7d", 80), shortRow("3p-1w", 70), shortRow("3p-5hr", 60), shortRow("3p-15hrs", 1), spacedWeekly, spacedFiveHour]]))
+            data: try JSONSerialization.data(withJSONObject: ["windows": [shortRow("3p-7d", 80), shortRow("3p-1w", 70), shortRow("3p-5hr", 60), shortRow("3p-15hrs", 1), spacedWeekly, spacedFiveHour, boundaryWeekly]]))
         let thirdParty = try XCTUnwrap(parsed.first { $0.id == "antigravity-third-party" })
         XCTAssertEqual(thirdParty.primaryWindows.map(\.cadenceToken), ["5h", "7d"],
                        "short markers classify and the 15hrs impostor stays out: \(thirdParty.windows.map { $0.label })")
         // Most-urgent picks the lowest remaining:  the spaced rows at 5/3 win
         // ONLY if the space-separated labels classify, and the 15hrs impostor
-        // at 1 wins the 7d slot if it wrongly classifies.
+        // at 1 wins the 7d slot if it wrongly classifies.  The boundary row
+        // ("version 7" label + "3p-day" marker, also at 1) steals the 7d slot
+        // only if a recombination spans the field boundary (kody).
         XCTAssertEqual(thirdParty.primaryWindows.map(\.remainingPercent), [3, 5],
                        "space-separated 7 day / 5 hour labels classify;  15hrs impostor stays out")
     }
