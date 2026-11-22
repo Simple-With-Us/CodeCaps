@@ -1019,11 +1019,15 @@ public final class CompanionNotificationDelegate: NSObject, UNUserNotificationCe
 /// 6. Supports customizable platform ordering matching the macOS preference.
 @MainActor
 public final class CompanionQuotaModel: ObservableObject {
+    /// One authoritative App Group identifier per platform (kody).  The
+    /// widget-probe launch hook runs off the main actor, so the constant is
+    /// nonisolated;  appGroupId derives from it and stays platform-conditional.
     #if os(macOS)
-    public static let appGroupId = "CC8UTF7ATG.codecaps"
+    public nonisolated static let codeCapsAppGroupId = "CC8UTF7ATG.codecaps"
     #else
-    public static let appGroupId = "group.com.simplewithus.codecaps"
+    public nonisolated static let codeCapsAppGroupId = "group.com.simplewithus.codecaps"
     #endif
+    public static let appGroupId = codeCapsAppGroupId
 
     public static let customMarksDirectory: URL = {
         let fm = FileManager.default
@@ -1073,7 +1077,7 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     @Published public var items: [CompanionQuotaItem] = []
-    @Published public var sourceScope: CompanionSourceScope = .thisIPhone
+    @Published public var sourceScope: CompanionSourceScope = .allSources
     @Published public var isRefreshing: Bool = false
     @Published public var lastUpdated: Date?
     /// Last failure worth telling the owner about.
@@ -2688,6 +2692,53 @@ public final class CompanionQuotaModel: ObservableObject {
         }
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
             || fiveHourLabels.contains(label) {
+            return "5h"
+        }
+        // KEEP THIS FALLBACK IN SYNC with QuotaCardProjection.antigravityPeriod.
+        // antigravity-cli pool copies carry no window token:  the period
+        // lives in the label ("Third-Party · 7-day window") or the model
+        // marker ("3p-weekly"), and an unclassified pool row drops out of
+        // the card, leaving the Third-Party pool empty.
+        let mt = (w.modelType ?? "").lowercased()
+        let mid = (w.modelId ?? "").lowercased()
+        // Only the Third-Party pool's own rows:  a Gemini copy that also
+        // lacks a token keeps its old classification, so this card never
+        // gains a row the Mac does not show.
+        guard label.hasPrefix("third-party") || mt.hasPrefix("3p-") || mid.hasPrefix("3p-") else { return nil }
+        // Exact tokens only: substring matching misclassifies canonical
+        // window labels (kody rule).  A leading "3p-" pool prefix is
+        // stripped so short markers ("3p-7d", "3p-5hr") classify like the
+        // long forms.
+        // Tokens stay grouped per field (kody):  a recombination that spans
+        // the label/modelType/modelId boundary is not a phrase.
+        let tokenFields = [label, mt, mid].map { field in
+            field.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "-" })
+                .map { $0.hasPrefix("3p-") ? String($0.dropFirst(3)) : String($0) }
+        }
+        // Catalogs mirror the exact-token lists above, short forms included
+        // (kody:  week, 10080m and 5hours complete the round-1 ask).
+        let weeklyTokens: Set<String> = ["weekly", "week", "7-day", "7d", "1w", "168h", "10080m"]
+        let fiveHourTokens: Set<String> = ["5h", "5-hour", "5hr", "5hours", "300m"]
+        // Space-separated phrases ("7 day", "5 hour") split into isolated
+        // tokens that miss the hyphenated catalog entries.  Recombine
+        // adjacent tokens with and without a hyphen so those labels
+        // classify the same way as "7-day" / "5-hour" / "5hr".
+        func matches(_ catalog: Set<String>) -> Bool {
+            for tokens in tokenFields {
+                if tokens.contains(where: catalog.contains) { return true }
+                guard tokens.count >= 2 else { continue }
+                for i in 0..<(tokens.count - 1) {
+                    let hyphenated = tokens[i] + "-" + tokens[i + 1]
+                    let glued = tokens[i] + tokens[i + 1]
+                    if catalog.contains(hyphenated) || catalog.contains(glued) { return true }
+                }
+            }
+            return false
+        }
+        if matches(weeklyTokens) {
+            return "weekly"
+        }
+        if matches(fiveHourTokens) {
             return "5h"
         }
         return nil

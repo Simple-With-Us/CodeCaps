@@ -11,6 +11,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -46,6 +47,14 @@ from widget_homescreen_probe import (  # noqa: E402
     main,
     materialize_probe_project,
     outcome_code,
+    PROBE_LAUNCH_ARGS,
+    GROUP_CONTAINER_METADATA,
+    app_group_root,
+    create_app_group_container,
+    find_app_group_container,
+    group_container_from_marker,
+    interpret_group_marker,
+    launch_argv,
     parse_created_udid,
     parse_data_container,
     parse_devices_listing,
@@ -354,6 +363,19 @@ class SeedAndResultTests(unittest.TestCase):
         self.assertEqual(outcome_code(outcome), EXIT_UNSUPPORTED)
         self.assertIn("Edit control missing", message)
 
+    def test_gallery_failure_with_on_screen_inventory_stays_a_refusal(self):
+        log = (
+            "error: -[WidgetHomeScreenProbeUITests testHomeScreenRendersSeededQuota] : "
+            "failed - unsupported-path: Edit control missing after long-press; "
+            "on-screen: button=Allow | staticText=CodeCaps\n"
+            "** TEST FAILED **\n"
+        )
+        outcome, message = interpret_log(log, 12000)
+        self.assertEqual(outcome, Outcome.UNSUPPORTED)
+        self.assertEqual(outcome_code(outcome), EXIT_UNSUPPORTED)
+        self.assertIn("Edit control missing", message)
+        self.assertIn("on-screen: button=Allow", message)
+
     def test_success_without_a_screenshot_is_a_failure(self):
         log = (
             "Test Case '-[WidgetHomeScreenProbeUITests testHomeScreenRendersSeededQuota]' started.\n"
@@ -513,8 +535,177 @@ class CommandPlanTests(unittest.TestCase):
         self.assertIn("simctl", screenshot_argv(UDID, Path("/tmp/home-screen.png"))[1])
         self.assertIn("screenshot", screenshot_argv(UDID, Path("/tmp/home-screen.png")))
 
+    def test_launch_argv_carries_probe_flag_on_a_fresh_process(self):
+        argv = launch_argv("UDID-1", "com.example.app")
+        self.assertEqual(argv[:4], ["xcrun", "simctl", "launch", "--terminate-running-process"])
+        self.assertEqual(argv[-2:], ["com.example.app", PROBE_LAUNCH_ARGS[0]])
+
+    def test_swift_hook_uses_the_same_probe_flag(self):
+        swift = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompanionApp.swift").read_text(encoding="utf-8")
+        self.assertIn(PROBE_LAUNCH_ARGS[0], swift)
+        self.assertIn("WidgetProbeHooks.touchGroupContainerIfRequested()", swift)
+
+    def test_swift_probe_uses_the_canonical_app_group_identifier(self):
+        group = read_app_group(WIDGET_ENTITLEMENTS)
+        model_src = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "Models" / "CompanionQuotaModel.swift").read_text(encoding="utf-8")
+        app_src = (ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompanionApp.swift").read_text(encoding="utf-8")
+        # The macOS/iOS split stays (CompanionModelTests pins the values).
+        self.assertIn("#if os(macOS)", model_src)
+        self.assertIn('"CC8UTF7ATG.codecaps"', model_src)
+        self.assertIn(f'"{group}"', model_src)
+        # One nonisolated alias exposes the model's identifier to the
+        # off-main-actor hook - never a second literal.
+        self.assertIn("nonisolated static let codeCapsAppGroupId =", model_src)
+        self.assertIn("public static let appGroupId = codeCapsAppGroupId", model_src)
+        self.assertIn("forSecurityApplicationGroupIdentifier: CompanionQuotaModel.codeCapsAppGroupId", app_src)
+        self.assertNotIn('forSecurityApplicationGroupIdentifier: "', app_src)
+
+    def test_interpret_group_marker_nil_proves_entitlement_refusal(self):
+        detail = interpret_group_marker("NIL")
+        self.assertIsNotNone(detail)
+        self.assertIn("nil", detail)
+
+    def test_interpret_group_marker_path_is_inconclusive(self):
+        self.assertIsNone(interpret_group_marker("/some/container/path"))
+
+    def test_interpret_group_marker_missing_is_inconclusive(self):
+        self.assertIsNone(interpret_group_marker(None))
+
+    def test_group_container_from_marker_rejects_nil_and_missing(self):
+        self.assertIsNone(group_container_from_marker("NIL", "UDID"))
+        self.assertIsNone(group_container_from_marker(None, "UDID"))
+
+    def test_group_container_from_marker_rejects_paths_outside_the_simulator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor = Path(tmp) / "AppGroup"
+            anchor.mkdir()
+            # An existing directory outside the anchor: only the containment
+            # check may reject it, never the later is_dir check.
+            self.assertIsNone(
+                group_container_from_marker(str(Path(tmp).parent), "UDID", anchor=anchor)
+            )
+
+    def test_group_container_from_marker_rejects_dotdot_escape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            anchor = (root / "sim" / "AppGroup").resolve()
+            anchor.mkdir(parents=True)
+            escaped = (root / "escaped")
+            escaped.mkdir()
+            # Resolves to root/escaped, which exists but sits outside anchor,
+            # so the containment guard (not a missing-directory check) rejects it.
+            escapee = anchor / ".." / ".." / "escaped"
+            self.assertTrue(escapee.resolve().is_dir())
+            self.assertIsNone(
+                group_container_from_marker(str(escapee), "UDID", anchor=anchor)
+            )
+
+    def test_group_container_from_marker_requires_an_existing_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor = Path(tmp) / "AppGroup"
+            anchor.mkdir()
+            missing = anchor / "DEADBEEF-0000-0000-0000-000000000000"
+            self.assertIsNone(
+                group_container_from_marker(str(missing), "UDID", anchor=anchor)
+            )
+
+    def test_group_container_from_marker_accepts_a_real_container(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor = Path(tmp) / "AppGroup"
+            container = anchor / "FCBF06D2-F193-45AA-BFE3-758F717C35FB"
+            container.mkdir(parents=True)
+            self.assertEqual(
+                group_container_from_marker(str(container), "UDID", anchor=anchor),
+                str(container.resolve()),
+            )
+
     def test_created_udid_parser(self):
         self.assertEqual(parse_created_udid(f"  {UDID.lower()}\n"), UDID.lower())
+
+
+class AppGroupContainerCreationTests(unittest.TestCase):
+    GROUP = "group.com.simplewithus.codecaps"
+
+    def test_create_writes_a_findable_container_with_group_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "AppGroup"
+            created = create_app_group_container(root, self.GROUP)
+            self.assertTrue(created.is_dir())
+            self.assertEqual(created.parent, root)
+            payload = plistlib.loads((created / GROUP_CONTAINER_METADATA).read_bytes())
+            self.assertEqual(payload.get("MCMMetadataIdentifier"), self.GROUP)
+            self.assertEqual(find_app_group_container(root, self.GROUP), created)
+
+    def test_create_is_idempotent_and_keeps_an_existing_container(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "AppGroup"
+            first = create_app_group_container(root, self.GROUP)
+            second = create_app_group_container(root, self.GROUP)
+            self.assertEqual(first, second)
+            self.assertEqual(len([p for p in root.iterdir() if p.is_dir()]), 1)
+
+    def test_create_ignores_containers_for_other_groups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "AppGroup"
+            other = create_app_group_container(root, "group.example.other")
+            created = create_app_group_container(root, self.GROUP)
+            self.assertNotEqual(created, other)
+            self.assertEqual(find_app_group_container(root, self.GROUP), created)
+            self.assertEqual(
+                find_app_group_container(root, "group.example.other"), other
+            )
+
+    def test_create_clones_template_metadata_but_replaces_the_identifier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "AppGroup"
+            template = Path(tmp) / GROUP_CONTAINER_METADATA
+            template.write_bytes(
+                plistlib.dumps(
+                    {
+                        "MCMMetadataIdentifier": "com.simplewithus.codecaps.ios",
+                        "MCMMetadataVersion": 7,
+                        "MCMMetadataPersonaUniqueString": "persona",
+                    },
+                    fmt=plistlib.FMT_BINARY,
+                )
+            )
+            created = create_app_group_container(root, self.GROUP, template)
+            payload = plistlib.loads((created / GROUP_CONTAINER_METADATA).read_bytes())
+            self.assertEqual(payload.get("MCMMetadataIdentifier"), self.GROUP)
+            self.assertEqual(payload.get("MCMMetadataVersion"), 7)
+            self.assertEqual(payload.get("MCMMetadataPersonaUniqueString"), "persona")
+
+    def test_app_group_root_derives_from_the_data_container(self):
+        data = (
+            "/Users/runner/Library/Developer/CoreSimulator/Devices/UDID"
+            "/data/Containers/Data/Application/SOME-UUID"
+        )
+        self.assertEqual(
+            app_group_root("UDID", data),
+            Path(
+                "/Users/runner/Library/Developer/CoreSimulator/Devices/UDID"
+                "/data/Containers/Shared/AppGroup"
+            ),
+        )
+
+    def test_app_group_root_falls_back_to_the_home_layout(self):
+        root = app_group_root("UDID", None)
+        self.assertEqual(root.name, "AppGroup")
+        self.assertIn("UDID", root.parts)
+        self.assertTrue(str(root).endswith("data/Containers/Shared/AppGroup"))
+
+    def test_app_group_root_honors_simulator_host_home(self):
+        with patch.dict(
+            os.environ, {"SIMULATOR_HOST_HOME": "/relocated/runner"}
+        ):
+            root = app_group_root("UDID", None)
+        self.assertEqual(
+            root,
+            Path(
+                "/relocated/runner/Library/Developer/CoreSimulator/Devices/"
+                "UDID/data/Containers/Shared/AppGroup"
+            ),
+        )
 
 
 class ProjectAndContractTests(unittest.TestCase):
@@ -628,6 +819,36 @@ class ProjectAndContractTests(unittest.TestCase):
         self.assertIn("existingResult", swift)
         self.assertIn('configurationDisplayName("AI Subscription Overview")', bundle)
         self.assertIn("AI Subscription Overview", swift)
+
+    def test_swift_gallery_contract_declines_the_permission_alert_first(self):
+        swift = (PROBE_SOURCES / "UITests" / "WidgetHomeScreenProbeUITests.swift").read_text(encoding="utf-8")
+        # The decline button's label carries a U+2019 apostrophe, written in
+        # the Swift source as an escape so the label stays byte-exact.
+        self.assertIn('doNotAllowLabel = "Don\\u{2019}t Allow"', swift)
+        self.assertIn("dismissPermissionAlert", swift)
+        # The alert is modal: the dismissal must run before the long-press,
+        # or the press never reaches the Home Screen and no Edit control
+        # exists.  An alert that will not dismiss stays an exit-78 refusal.
+        self.assertLess(
+            swift.index("dismissPermissionAlert(springboard)"),
+            swift.index("press(forDuration: 2.0)"),
+        )
+        self.assertIn(
+            "unsupported-path: notification permission alert could not be dismissed", swift)
+        # A contract failure names what SpringBoard actually presented.
+        self.assertIn("elementInventory", swift)
+        self.assertIn("on-screen:", swift)
+        # The gallery never presents the bare widget name as a result row:
+        # the widget entry is a button with the compound "App, Widget"
+        # label, and the widget page's confirm button carries a leading
+        # space.  Both presented forms are pinned.
+        self.assertIn('galleryAddWidgetLabel = " Add Widget"', swift)
+        self.assertIn('"\\(appLabel), \\(widgetLabel)"', swift)
+        # The no-alert verdict requires both alert buttons absent, and the
+        # widget fallback returns a tappable row (cells/buttons), never a
+        # static text.
+        self.assertIn("existingControl(app, allowLabel) == nil", swift)
+        self.assertIn("return waitForResult(app, widgetLabel, timeout: 3)", swift)
 
     def test_off_device_widget_probe_still_compiles_the_real_views(self):
         text = (ROOT / "scripts/test-widget-ui-native.sh").read_text(encoding="utf-8")

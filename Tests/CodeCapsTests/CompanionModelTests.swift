@@ -235,8 +235,19 @@ final class CompanionModelTests: XCTestCase {
     }
 
     func testPlatformSpecificAppGroupIds() throws {
-        XCTAssertTrue(try hasPlatformAppGroups(readCompanionModelSource()),
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(try hasPlatformAppGroups(source),
                       "App Group IDs must match their macOS and iOS branches")
+        XCTAssertTrue(
+            source.contains(#"codeCapsAppGroupId = "group.com.simplewithus.codecaps""#),
+            "iOS must use its registered App Group"
+        )
+        XCTAssertTrue(source.contains(#"codeCapsAppGroupId = "CC8UTF7ATG.codecaps""#))
+        XCTAssertTrue(
+            source.contains(#"appGroupId = codeCapsAppGroupId"#),
+            "the shared appGroupId alias must derive from the platform constant (#529)"
+        )
+        XCTAssertTrue(source.contains("#if os(macOS)"))
     }
 
     func testPlatformAppGroupContractRejectsMisleadingSource() throws {
