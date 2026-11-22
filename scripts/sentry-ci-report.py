@@ -90,6 +90,8 @@ APP = "codecaps"
 
 CRON_SCHEDULES = {
     "iOS TestFlight ship (GitHub-hosted macOS)": "26,56 * * * *",
+    # auto-merge-prs.yml: fleet auto-merge sweep (15 min).
+    "Auto-merge PRs": "*/15 * * * *",
 }
 _CRON_SCHEDULES_FOLDED = {name.casefold(): expr for name, expr in CRON_SCHEDULES.items()}
 
@@ -103,7 +105,13 @@ DEFAULT_CHECKIN_MARGIN = 15
 # `ci-CI-refs/heads/main` group can also queue or drop that tick.  Do not
 # copy this onto 30-min macos ship crons (FLEET-INFRA-CC / DA / CX): those
 # drop ticks entirely, so a wider margin still misses.
-CHECKIN_MARGIN_OVERRIDES = {}
+CHECKIN_MARGIN_OVERRIDES = {
+    # Auto-merge PRs is a 15-minute cron; the reporter check-in arrives
+    # only after the run completes plus workflow_run dispatch.  30 minutes
+    # covers ordinary GitHub lag and a short sweep without hiding a
+    # dropped tick the next window would also miss.
+    "Auto-merge PRs": 30,
+}
 _CHECKIN_MARGINS_FOLDED = {name.casefold(): margin for name, margin in CHECKIN_MARGIN_OVERRIDES.items()}
 
 DEFAULT_MAX_RUNTIME = 60
