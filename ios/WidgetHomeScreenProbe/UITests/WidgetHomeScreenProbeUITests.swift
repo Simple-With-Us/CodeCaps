@@ -1,10 +1,15 @@
 import XCTest
 
-/// Pinned iOS 18–27 home-screen gallery contract: long-press empty wallpaper,
-/// Edit, Add Widget, search CodeCaps, add AI Subscription Overview, Done.
+/// Pinned iOS 18–27 home-screen gallery contract: decline the companion's
+/// pending notification-permission alert, long-press empty wallpaper, Edit,
+/// Add Widget, search CodeCaps, add AI Subscription Overview, Done.
 /// A missing control fails closed with an `unsupported-path:` message.  The
 /// test does not try a second gesture and does not retry.
 final class WidgetHomeScreenProbeUITests: XCTestCase {
+    /// SpringBoard labels the notification-permission decline button with a
+    /// U+2019 apostrophe; the escape keeps the label byte-exact.
+    private let doNotAllowLabel = "Don\u{2019}t Allow"
+    private let allowLabel = "Allow"
     private let editLabel = "Edit"
     private let addWidgetLabel = "Add Widget"
     private let doneLabel = "Done"
@@ -28,6 +33,11 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         springboard.activate()
+
+        guard dismissPermissionAlert(springboard) else {
+            XCTFail("unsupported-path: notification permission alert could not be dismissed; on-screen: \(elementInventory(springboard))")
+            return
+        }
 
         let wallpaper = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.70))
         wallpaper.press(forDuration: 2.0)
@@ -92,6 +102,31 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         attachment.name = "home-screen-widget"
         add(attachment)
+    }
+
+    /// The companion asks for notification permission when its model first
+    /// loads: two alert kinds ship enabled with notifications on, and the
+    /// model's startup sync assigns its preferences, which makes the model
+    /// request authorization.  On a fresh simulator that system alert is
+    /// still sitting on SpringBoard when this test starts.  The alert is
+    /// modal — while it is up, the long-press never reaches the Home Screen
+    /// and no Edit control exists — so the contract declines it first.  The
+    /// probe never grants a permission on the owner's behalf, and the widget
+    /// render does not need notifications.  Returns false when an alert is
+    /// present but will not dismiss.
+    private func dismissPermissionAlert(_ app: XCUIApplication) -> Bool {
+        guard let decline = waitForControl(app, doNotAllowLabel, timeout: 5) else {
+            return true
+        }
+        tap(decline)
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            if existingControl(app, doNotAllowLabel) == nil && existingControl(app, allowLabel) == nil {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < deadline
+        return existingControl(app, doNotAllowLabel) == nil && existingControl(app, allowLabel) == nil
     }
 
     /// Diagnostic inventory for a contract failure: the labeled elements
