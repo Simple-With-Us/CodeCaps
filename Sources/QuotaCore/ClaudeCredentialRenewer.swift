@@ -217,10 +217,13 @@ extension ClaudeCredentialRenewer {
             now: { Date() })
     }
 
-    /// Claude Code's on-disk credential store, read with the same size cap
-    /// the parser enforces.
+    /// Claude Code's on-disk credential store.  The parser's 1 MB cap is
+    /// enforced on the file's size before its bytes are loaded, so an
+    /// oversized file is never fully allocated here.
     static func readCredentialsFile(homeDirectory: URL) -> [String: Any] {
         let url = homeDirectory.appendingPathComponent(".claude/.credentials.json")
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = (attributes[.size] as? NSNumber)?.int64Value, size > 1_048_576 { return [:] }
         guard let data = try? Data(contentsOf: url) else { return [:] }
         return ClaudeOAuthParser.parse(data) ?? [:]
     }
@@ -228,7 +231,9 @@ extension ClaudeCredentialRenewer {
     /// Replaces the credentials file with `data`, atomically and at owner-
     /// only permissions: the new bytes are staged beside the target, set to
     /// 0600 while still staged, then moved over the old file, so no reader
-    /// can ever catch a torn or world-readable credential.
+    /// can ever catch a torn credential.  `replaceItemAt` keeps the replaced
+    /// file's permissions, so 0600 is re-applied to the file now in place —
+    /// a pre-existing world-readable credentials file does not stay that way.
     static func writeCredentialsFile(_ data: Data, homeDirectory: URL) -> Bool {
         let directory = homeDirectory.appendingPathComponent(".claude", isDirectory: true)
         let target = directory.appendingPathComponent(".credentials.json")
@@ -243,6 +248,7 @@ extension ClaudeCredentialRenewer {
             } else {
                 try fileManager.moveItem(at: staging, to: target)
             }
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
             return true
         } catch {
             try? fileManager.removeItem(at: staging)

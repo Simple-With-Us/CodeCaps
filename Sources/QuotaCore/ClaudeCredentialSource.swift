@@ -548,12 +548,17 @@ public enum ClaudeCredentialSource {
         } else {
             return nil
         }
+        // Every match must name the SAME account.  Duplicate items that
+        // disagree make the write target ambiguous — updating the wrong
+        // one would strand the live login on a dead refresh token — so an
+        // ambiguous lookup refuses the write-back instead of guessing.
+        var found: String?
         for item in items {
-            if let account = item[kSecAttrAccount as String] as? String, !account.isEmpty {
-                return account
-            }
+            guard let account = item[kSecAttrAccount as String] as? String, !account.isEmpty else { continue }
+            if let existing = found, existing != account { return nil }
+            found = account
         }
-        return nil
+        return found
     }
 
     /// Writes a renewed copy of Claude Code's saved login back into its

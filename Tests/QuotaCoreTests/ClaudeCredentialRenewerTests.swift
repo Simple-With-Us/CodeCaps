@@ -223,6 +223,15 @@ final class ClaudeCredentialRenewerTests: XCTestCase {
         let root = renewableRoot(refreshToken: "file-refresh")
         let data = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
 
+        // A pre-existing world-readable credentials file: the renewal must
+        // not leave it that way (replaceItemAt keeps the replaced file's
+        // permissions, so the write re-applies 0600 to the result).
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let existing = claudeDir.appendingPathComponent(".credentials.json")
+        FileManager.default.createFile(atPath: existing.path, contents: Data("old".utf8))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: existing.path)
+
         XCTAssertTrue(ClaudeCredentialRenewer.writeCredentialsFile(data, homeDirectory: home))
         let readBack = ClaudeCredentialRenewer.readCredentialsFile(homeDirectory: home)
         XCTAssertEqual(ClaudeOAuthRefresh.refreshToken(in: readBack), "file-refresh")
