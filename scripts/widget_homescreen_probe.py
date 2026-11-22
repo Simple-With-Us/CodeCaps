@@ -14,7 +14,10 @@ pinned contract does not recognise.  Anything else exits 1.  A refusal is
 never reported as a pass.
 
 The driver does not open Simulator.app and deletes only the simulator it
-created.
+created.  It does create that simulator's App Group container itself (see
+create_app_group_container):  hosted CI runtimes never create one for an
+ad-hoc-signed app, and without a container this check could only ever
+refuse on those runners.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -65,6 +69,11 @@ APP_ENTITLEMENTS = ROOT / "ios" / "CodeCapsCompanion" / "App" / "CodeCapsCompani
 # "entitlement not honored" from "the app never asked".
 PROBE_LAUNCH_ARGS = ["-CCWidgetProbeTouchGroupContainer"]
 PROBE_GROUP_MARKER = "cc-widget-probe-group-container.txt"
+# File the simulator's container manager writes into every container it
+# creates;  its MCMMetadataIdentifier is the container's identity (the App
+# Group id for a shared container).  The probe writes the same file when it
+# creates the App Group container for its disposable simulator.
+GROUP_CONTAINER_METADATA = ".com.apple.mobile_container_manager.metadata.plist"
 WIDGET_ENTITLEMENTS = (
     ROOT / "ios" / "CodeCapsCompanion" / "Widgets" / "CodeCapsWidgets.entitlements"
 )
@@ -1254,6 +1263,92 @@ def group_container_from_marker(
     return str(resolved)
 
 
+def app_group_root(udid: str, data_container: str | None = None) -> Path:
+    """The simulator's shared App Group area.
+
+    Anchored on the companion's data container when one is known
+    (``.../Containers/Data/Application/<UUID>`` -> ``.../Containers``), so
+    SIMULATOR_HOST_HOME layouts resolve the same way the marker recovery
+    anchors;  the runner-home layout is the fallback.
+    """
+    if data_container:
+        parents = Path(data_container).parents
+        if len(parents) >= 3:
+            return parents[2] / "Shared" / "AppGroup"
+    host_home = os.environ.get("SIMULATOR_HOST_HOME")
+    base = Path(host_home) if host_home else Path.home()
+    return (
+        base
+        / "Library/Developer/CoreSimulator/Devices"
+        / udid
+        / "data/Containers/Shared/AppGroup"
+    )
+
+
+def find_app_group_container(root: Path, group_id: str) -> Path | None:
+    """An existing container under *root* whose metadata names *group_id*."""
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        try:
+            payload = plistlib.loads((entry / GROUP_CONTAINER_METADATA).read_bytes())
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict) and payload.get("MCMMetadataIdentifier") == group_id:
+            return entry
+    return None
+
+
+def create_app_group_container(
+    root: Path,
+    group_id: str,
+    template_metadata: Path | None = None,
+) -> Path:
+    """Create the App Group container the hosted runtime never creates.
+
+    On GitHub-hosted runners the simulator's container manager does not
+    create a shared container for the ad-hoc-signed companion, so
+    ``simctl get_app_container ... groups`` stays empty and the probe can
+    only ever refuse with exit 78 (CC-219).  The container is an ordinary
+    directory under the simulator's AppGroup area carrying the same
+    metadata plist the container manager itself writes.  The probe creates
+    it while its disposable simulator is shut down, so the container
+    manager registers it on the next boot and the companion's
+    ``containerURL(forSecurityApplicationGroupIdentifier:)`` resolves it
+    for real.  Creating a directory the runtime still refuses to register
+    changes nothing downstream:  the existing wait and marker checks keep
+    refusing honestly in that case.
+
+    The metadata payload is cloned from the companion data container's own
+    system-written metadata when available (same runtime, same format),
+    with only the identifier replaced;  a container that already exists for
+    *group_id* is returned unchanged.
+    """
+    existing = find_app_group_container(root, group_id)
+    if existing is not None:
+        return existing
+    payload: dict = {}
+    if template_metadata is not None:
+        try:
+            template = plistlib.loads(template_metadata.read_bytes())
+        except (OSError, ValueError):
+            template = None
+        if isinstance(template, dict):
+            payload = dict(template)
+    payload["MCMMetadataIdentifier"] = group_id
+    payload.setdefault("MCMMetadataVersion", 1)
+    container = root / str(uuid.uuid4()).upper()
+    container.mkdir(parents=True, exist_ok=False)
+    (container / GROUP_CONTAINER_METADATA).write_bytes(
+        plistlib.dumps(payload, fmt=plistlib.FMT_BINARY)
+    )
+    return container
+
+
 def _wait_for_container(
     runner: ProcessRunner,
     argv: list[str],
@@ -1388,7 +1483,31 @@ def execute(host: Host, work: Path) -> int:
         _record_signed_entitlements(runner, app, work / "signed-app-entitlements.xml")
         _boot(runner, udid)
         runner.run(["xcrun", "simctl", "install", udid, str(app)])
+        # Hosted CI runtimes never create the App Group container for the
+        # ad-hoc-signed companion, so create it on disk while the simulator
+        # is shut down for the WidgetKit reboot;  the container manager
+        # registers it on the next boot (see create_app_group_container).
+        data_code, data_out = runner.run(
+            ["xcrun", "simctl", "get_app_container", udid, app_bundle, "data"],
+            check=False,
+        )
+        installed_data = parse_data_container(data_out) if data_code == 0 else None
+        group_root = app_group_root(udid, installed_data)
+        template = (
+            Path(installed_data) / GROUP_CONTAINER_METADATA if installed_data else None
+        )
         runner.run(["xcrun", "simctl", "shutdown", udid], check=False)
+        try:
+            created_group = create_app_group_container(group_root, app_group, template)
+        except OSError as exc:
+            raise ProbeFailure(
+                f"failed: could not create the app group container under {group_root}: {exc}",
+                EXIT_FAILED,
+            ) from exc
+        print(
+            f"widget-homescreen: app group container ready at {created_group}",
+            flush=True,
+        )
         _boot(runner, udid)
         launch_code, launch_out = _launch(runner, udid, app_bundle)
         if launch_code != 0:

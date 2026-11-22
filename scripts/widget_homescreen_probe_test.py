@@ -11,6 +11,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -47,6 +48,10 @@ from widget_homescreen_probe import (  # noqa: E402
     materialize_probe_project,
     outcome_code,
     PROBE_LAUNCH_ARGS,
+    GROUP_CONTAINER_METADATA,
+    app_group_root,
+    create_app_group_container,
+    find_app_group_container,
     group_container_from_marker,
     interpret_group_marker,
     launch_argv,
@@ -603,6 +608,91 @@ class CommandPlanTests(unittest.TestCase):
 
     def test_created_udid_parser(self):
         self.assertEqual(parse_created_udid(f"  {UDID.lower()}\n"), UDID.lower())
+
+
+class AppGroupContainerCreationTests(unittest.TestCase):
+    GROUP = "group.com.simplewithus.codecaps"
+
+    def test_create_writes_a_findable_container_with_group_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "AppGroup"
+            created = create_app_group_container(root, self.GROUP)
+            self.assertTrue(created.is_dir())
+            self.assertEqual(created.parent, root)
+            payload = plistlib.loads((created / GROUP_CONTAINER_METADATA).read_bytes())
+            self.assertEqual(payload.get("MCMMetadataIdentifier"), self.GROUP)
+            self.assertEqual(find_app_group_container(root, self.GROUP), created)
+
+    def test_create_is_idempotent_and_keeps_an_existing_container(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "AppGroup"
+            first = create_app_group_container(root, self.GROUP)
+            second = create_app_group_container(root, self.GROUP)
+            self.assertEqual(first, second)
+            self.assertEqual(len([p for p in root.iterdir() if p.is_dir()]), 1)
+
+    def test_create_ignores_containers_for_other_groups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "AppGroup"
+            other = create_app_group_container(root, "group.example.other")
+            created = create_app_group_container(root, self.GROUP)
+            self.assertNotEqual(created, other)
+            self.assertEqual(find_app_group_container(root, self.GROUP), created)
+            self.assertEqual(
+                find_app_group_container(root, "group.example.other"), other
+            )
+
+    def test_create_clones_template_metadata_but_replaces_the_identifier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "AppGroup"
+            template = Path(tmp) / GROUP_CONTAINER_METADATA
+            template.write_bytes(
+                plistlib.dumps(
+                    {
+                        "MCMMetadataIdentifier": "com.simplewithus.codecaps.ios",
+                        "MCMMetadataVersion": 7,
+                        "MCMMetadataPersonaUniqueString": "persona",
+                    },
+                    fmt=plistlib.FMT_BINARY,
+                )
+            )
+            created = create_app_group_container(root, self.GROUP, template)
+            payload = plistlib.loads((created / GROUP_CONTAINER_METADATA).read_bytes())
+            self.assertEqual(payload.get("MCMMetadataIdentifier"), self.GROUP)
+            self.assertEqual(payload.get("MCMMetadataVersion"), 7)
+            self.assertEqual(payload.get("MCMMetadataPersonaUniqueString"), "persona")
+
+    def test_app_group_root_derives_from_the_data_container(self):
+        data = (
+            "/Users/runner/Library/Developer/CoreSimulator/Devices/UDID"
+            "/data/Containers/Data/Application/SOME-UUID"
+        )
+        self.assertEqual(
+            app_group_root("UDID", data),
+            Path(
+                "/Users/runner/Library/Developer/CoreSimulator/Devices/UDID"
+                "/data/Containers/Shared/AppGroup"
+            ),
+        )
+
+    def test_app_group_root_falls_back_to_the_home_layout(self):
+        root = app_group_root("UDID", None)
+        self.assertEqual(root.name, "AppGroup")
+        self.assertIn("UDID", root.parts)
+        self.assertTrue(str(root).endswith("data/Containers/Shared/AppGroup"))
+
+    def test_app_group_root_honors_simulator_host_home(self):
+        with patch.dict(
+            os.environ, {"SIMULATOR_HOST_HOME": "/relocated/runner"}
+        ):
+            root = app_group_root("UDID", None)
+        self.assertEqual(
+            root,
+            Path(
+                "/relocated/runner/Library/Developer/CoreSimulator/Devices/"
+                "UDID/data/Containers/Shared/AppGroup"
+            ),
+        )
 
 
 class ProjectAndContractTests(unittest.TestCase):
