@@ -120,11 +120,13 @@ struct ClaudeKeychainProbe: Sendable {
         lookUpItem: { ClaudeCredentialSource.lookUpItemAttributes() })
 }
 
-/// Reads Claude Code's own saved login.  This type never writes it, refreshes
-/// it, re-ACLs it, or deletes it.  When the saved access token has expired
-/// while Claude Code sat idle, `LocalQuotaReader` may ask Claude Code itself
-/// to renew its own login (a zero-turn `/usage` run); Claude Code then writes
-/// its own Keychain item and CodeCaps only reads the result.
+/// Reads Claude Code's own saved login, and performs exactly one write:
+/// handing a renewed copy of that same login back after a refresh grant
+/// (`updateSavedLogin`).  The grant rotates the refresh token, so a renewal
+/// that is not written back would strand the saved login holding a dead
+/// refresh token.  The write goes through the same `/usr/bin/security`
+/// channel as the silent read, never re-ACLs the item, and never deletes
+/// it.  Nothing else here writes or mutates the login.
 public enum ClaudeCredentialSource {
     static let service = "Claude Code-credentials"
 
@@ -524,6 +526,106 @@ public enum ClaudeCredentialSource {
         }
         guard let decoded = decodeOutput(data) else { return failed("empty output") }
         return .found(decoded)
+    }
+
+    /// The account attribute of Claude Code's saved login item — metadata
+    /// only, read with the same attributes-only query as the existence
+    /// check, so it never asks for the secret.  The renewal write-back
+    /// needs it because a generic-password item is identified by service
+    /// AND account: writing without the account Claude Code used would
+    /// create a second item instead of updating its login.
+    static func savedLoginAccount() -> String? {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(attributesQuery(context: context) as CFDictionary, &result)
+        guard status == errSecSuccess else { return nil }
+        let items: [[String: Any]]
+        if let array = result as? [[String: Any]] {
+            items = array
+        } else if let single = result as? [String: Any] {
+            items = [single]
+        } else {
+            return nil
+        }
+        for item in items {
+            if let account = item[kSecAttrAccount as String] as? String, !account.isEmpty {
+                return account
+            }
+        }
+        return nil
+    }
+
+    /// Writes a renewed copy of Claude Code's saved login back into its
+    /// Keychain item.  This is the one write this type performs, and it is
+    /// a renewal, not an edit: the payload is the record that was read from
+    /// this item with only its token fields advanced by Anthropic's refresh
+    /// grant (see `ClaudeCredentialRenewer`).
+    ///
+    /// The write runs `/usr/bin/security add-generic-password -U`, the same
+    /// tool the silent read uses, judged by securityd under the same
+    /// `apple-tool:` partition the item allows, so after the owner's
+    /// one-time Always Allow it lands without a panel.  The payload is fed
+    /// to the child's stdin — `security` prompts there when `-w` carries no
+    /// argument — and never travels in the argument list, where any local
+    /// process could read it while the child runs.  The child is bounded
+    /// and killed at its deadline like the read child, its output goes
+    /// nowhere, and only the exit status is reported.  Callers verify the
+    /// write the way they verify everything here: by reading the item again.
+    public static func updateSavedLogin(_ data: Data) async -> Bool {
+        guard data.count <= maxCredentialBytes, !data.contains(0x0A),
+              let account = savedLoginAccount() else { return false }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let gate = KeychainReadGate(continuation)
+            DispatchQueue.global(qos: .utility).async {
+                gate.finish(runSecurityUpdate(account: account, payload: data,
+                                              deadline: cliAttemptDeadline,
+                                              shouldStop: { gate.isFinished }))
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + accessTimeout) {
+                if gate.finish(false) {
+                    log.notice("claude keychain renewal write gave up after its bounded wait")
+                }
+            }
+        }
+    }
+
+    /// One bounded `security add-generic-password -U` run.  `-U` updates
+    /// the existing item in place; the item's access list is untouched.
+    /// The payload is written to the child's stdin twice — the prompt asks
+    /// for the new value and then its confirmation — followed by closing
+    /// the pipe, so the child never waits on input past what it was fed.
+    static func runSecurityUpdate(account: String,
+                                  payload: Data,
+                                  deadline seconds: TimeInterval,
+                                  shouldStop: @Sendable () -> Bool) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["add-generic-password", "-s", service, "-a", account, "-U", "-w"]
+        process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let input = Pipe()
+        process.standardInput = input
+        do {
+            try process.run()
+        } catch {
+            return false
+        }
+        var feed = payload
+        feed.append(0x0A)
+        feed.append(payload)
+        feed.append(0x0A)
+        let writer = input.fileHandleForWriting
+        try? writer.write(contentsOf: feed)
+        try? writer.close()
+        defer { stop(process) }
+        let deadline = ProcessInfo.processInfo.systemUptime + seconds
+        while process.isRunning {
+            if shouldStop() || ProcessInfo.processInfo.systemUptime >= deadline { return false }
+            usleep(5_000)
+        }
+        return process.terminationReason == .exit && process.terminationStatus == 0
     }
 
     /// `.failed`, with the reason in the log.  Reasons are status codes and
