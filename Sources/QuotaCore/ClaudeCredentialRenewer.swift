@@ -217,13 +217,16 @@ extension ClaudeCredentialRenewer {
             now: { Date() })
     }
 
-    /// Claude Code's on-disk credential store.  The parser's 1 MB cap is
-    /// enforced on the file's size before its bytes are loaded, so an
-    /// oversized file is never fully allocated here.
+    /// Claude Code's on-disk credential store.  The file is gated before
+    /// its bytes are loaded: it must be a regular file (a FIFO or device at
+    /// this path would block the read indefinitely) and within the parser's
+    /// 1 MB cap (an oversized file is never fully allocated here).
     static func readCredentialsFile(homeDirectory: URL) -> [String: Any] {
         let url = homeDirectory.appendingPathComponent(".claude/.credentials.json")
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = (attributes[.size] as? NSNumber)?.int64Value, size > 1_048_576 { return [:] }
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) {
+            guard (attributes[.type] as? FileAttributeType) == .typeRegular else { return [:] }
+            if let size = (attributes[.size] as? NSNumber)?.int64Value, size > 1_048_576 { return [:] }
+        }
         guard let data = try? Data(contentsOf: url) else { return [:] }
         return ClaudeOAuthParser.parse(data) ?? [:]
     }
