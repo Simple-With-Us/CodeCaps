@@ -11,6 +11,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -679,6 +680,19 @@ class AppGroupContainerCreationTests(unittest.TestCase):
         self.assertEqual(root.name, "AppGroup")
         self.assertIn("UDID", root.parts)
         self.assertTrue(str(root).endswith("data/Containers/Shared/AppGroup"))
+
+    def test_app_group_root_honors_simulator_host_home(self):
+        with patch.dict(
+            os.environ, {"SIMULATOR_HOST_HOME": "/relocated/runner"}
+        ):
+            root = app_group_root("UDID", None)
+        self.assertEqual(
+            root,
+            Path(
+                "/relocated/runner/Library/Developer/CoreSimulator/Devices/"
+                "UDID/data/Containers/Shared/AppGroup"
+            ),
+        )
 
 
 class ProjectAndContractTests(unittest.TestCase):
