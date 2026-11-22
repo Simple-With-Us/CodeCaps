@@ -33,13 +33,13 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
         wallpaper.press(forDuration: 2.0)
 
         guard let edit = waitForControl(springboard, editLabel, timeout: 8) else {
-            XCTFail("unsupported-path: Edit control missing after long-press")
+            XCTFail("unsupported-path: Edit control missing after long-press; on-screen: \(elementInventory(springboard))")
             return
         }
         tap(edit)
 
         guard let addWidget = waitForControl(springboard, addWidgetLabel, timeout: 8) else {
-            XCTFail("unsupported-path: Add Widget control missing")
+            XCTFail("unsupported-path: Add Widget control missing; on-screen: \(elementInventory(springboard))")
             return
         }
         tap(addWidget)
@@ -92,6 +92,32 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         attachment.name = "home-screen-widget"
         add(attachment)
+    }
+
+    /// Diagnostic inventory for a contract failure: the labeled elements
+    /// SpringBoard is presenting right now, so the failure line names what
+    /// was actually on screen instead of only what was missing.
+    private func elementInventory(_ app: XCUIApplication) -> String {
+        let kinds: [(String, XCUIElementType)] = [
+            ("button", .button),
+            ("menuItem", .menuItem),
+            ("cell", .cell),
+            ("icon", .icon),
+            ("staticText", .staticText),
+            ("other", .other),
+        ]
+        var entries: [String] = []
+        for (name, type) in kinds {
+            for element in app.descendants(matching: type).allElementsBoundByIndex {
+                if !element.label.isEmpty {
+                    entries.append("\(name)=\(element.label)")
+                }
+                if entries.count >= 150 {
+                    return entries.joined(separator: " | ")
+                }
+            }
+        }
+        return entries.isEmpty ? "<no labeled elements>" : entries.joined(separator: " | ")
     }
 
     /// Search lists the app, then the widget.  Tap the app row only when the
