@@ -12,6 +12,8 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
     private let allowLabel = "Allow"
     private let editLabel = "Edit"
     private let addWidgetLabel = "Add Widget"
+    /// The widget page's confirm button is labeled with a leading space.
+    private let galleryAddWidgetLabel = " Add Widget"
     private let doneLabel = "Done"
     private let appLabel = "CodeCaps"
     private let widgetLabel = "AI Subscription Overview"
@@ -68,7 +70,8 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
         }
         tap(widget)
 
-        guard let confirm = waitForControl(springboard, addWidgetLabel, timeout: 8) else {
+        guard let confirm = waitForControl(springboard, addWidgetLabel, timeout: 8)
+            ?? waitForControl(springboard, galleryAddWidgetLabel, timeout: 3) else {
             XCTFail("unsupported-path: gallery confirm Add Widget missing; on-screen: \(elementInventory(springboard))")
             return
         }
@@ -155,18 +158,29 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
         return entries.isEmpty ? "<no labeled elements>" : entries.joined(separator: " | ")
     }
 
-    /// Search lists the app, then the widget.  Tap the app row only when the
-    /// widget name is not on screen yet, then require the widget itself.
-    /// Rows are cells or buttons.  The search field's typed text is not a row.
+    /// Search lists the app, and can also list the widget itself — as a
+    /// button carrying the compound "CodeCaps, AI Subscription Overview"
+    /// label, never the bare widget name.  The app's gallery page presents
+    /// that same compound button for the widget preview, with the widget
+    /// name as a static text and the description underneath.  Match what
+    /// SpringBoard actually presents: the compound button in the results,
+    /// or the app row first and then the widget on its page.
     private func waitForWidgetResult(_ app: XCUIApplication) -> XCUIElement? {
-        if let widget = waitForResult(app, widgetLabel, timeout: 8) {
+        let compoundLabel = "\(appLabel), \(widgetLabel)"
+        if let entry = waitForResult(app, compoundLabel, timeout: 8) {
+            return entry
+        }
+        if let widget = waitForResult(app, widgetLabel, timeout: 2) {
             return widget
         }
         guard let appRow = waitForResult(app, appLabel, timeout: 2) else {
             return nil
         }
         tap(appRow)
-        return waitForResult(app, widgetLabel, timeout: 8)
+        if let widget = waitForResult(app, compoundLabel, timeout: 8) {
+            return widget
+        }
+        return waitForControl(app, widgetLabel, timeout: 3)
     }
 
     private func waitForResult(_ app: XCUIApplication, _ label: String, timeout: TimeInterval) -> XCUIElement? {
