@@ -838,6 +838,12 @@ class ProjectAndContractTests(unittest.TestCase):
         # A contract failure names what SpringBoard actually presented.
         self.assertIn("elementInventory", swift)
         self.assertIn("on-screen:", swift)
+        # The gallery never presents the bare widget name as a result row:
+        # the widget entry is a button with the compound "App, Widget"
+        # label, and the widget page's confirm button carries a leading
+        # space.  Both presented forms are pinned.
+        self.assertIn('galleryAddWidgetLabel = " Add Widget"', swift)
+        self.assertIn('"\\(appLabel), \\(widgetLabel)"', swift)
 
     def test_off_device_widget_probe_still_compiles_the_real_views(self):
         text = (ROOT / "scripts/test-widget-ui-native.sh").read_text(encoding="utf-8")
