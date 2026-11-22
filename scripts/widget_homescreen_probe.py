@@ -1275,8 +1275,10 @@ def app_group_root(udid: str, data_container: str | None = None) -> Path:
         parents = Path(data_container).parents
         if len(parents) >= 3:
             return parents[2] / "Shared" / "AppGroup"
+    host_home = os.environ.get("SIMULATOR_HOST_HOME")
+    base = Path(host_home) if host_home else Path.home()
     return (
-        Path.home()
+        base
         / "Library/Developer/CoreSimulator/Devices"
         / udid
         / "data/Containers/Shared/AppGroup"
