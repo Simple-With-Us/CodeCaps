@@ -844,6 +844,11 @@ class ProjectAndContractTests(unittest.TestCase):
         # space.  Both presented forms are pinned.
         self.assertIn('galleryAddWidgetLabel = " Add Widget"', swift)
         self.assertIn('"\\(appLabel), \\(widgetLabel)"', swift)
+        # The no-alert verdict requires both alert buttons absent, and the
+        # widget fallback returns a tappable row (cells/buttons), never a
+        # static text.
+        self.assertIn("existingControl(app, allowLabel) == nil", swift)
+        self.assertIn("return waitForResult(app, widgetLabel, timeout: 3)", swift)
 
     def test_off_device_widget_probe_still_compiles_the_real_views(self):
         text = (ROOT / "scripts/test-widget-ui-native.sh").read_text(encoding="utf-8")
