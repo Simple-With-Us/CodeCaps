@@ -98,7 +98,7 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
     /// SpringBoard is presenting right now, so the failure line names what
     /// was actually on screen instead of only what was missing.
     private func elementInventory(_ app: XCUIApplication) -> String {
-        let kinds: [(String, XCUIElementType)] = [
+        let kinds: [(String, XCUIElement.ElementType)] = [
             ("button", .button),
             ("menuItem", .menuItem),
             ("cell", .cell),
