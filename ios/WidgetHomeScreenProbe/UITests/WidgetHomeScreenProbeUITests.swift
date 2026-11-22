@@ -119,7 +119,9 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
     /// present but will not dismiss.
     private func dismissPermissionAlert(_ app: XCUIApplication) -> Bool {
         guard let decline = waitForControl(app, doNotAllowLabel, timeout: 5) else {
-            return true
+            // No decline button is not yet proof of no alert: the modal is
+            // absent only when neither of its buttons is on screen.
+            return existingControl(app, allowLabel) == nil
         }
         tap(decline)
         let deadline = Date().addingTimeInterval(5)
@@ -144,14 +146,20 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
             ("staticText", .staticText),
             ("other", .other),
         ]
+        let labeled = NSPredicate(format: "label != ''")
         var entries: [String] = []
         for (name, type) in kinds {
-            for element in app.descendants(matching: type).allElementsBoundByIndex {
-                if !element.label.isEmpty {
-                    entries.append("\(name)=\(element.label)")
-                }
+            let query = app.descendants(matching: type).matching(labeled)
+            for index in 0..<25 {
                 if entries.count >= 150 {
                     return entries.joined(separator: " | ")
+                }
+                let element = query.element(boundBy: index)
+                if !element.exists {
+                    break
+                }
+                if !element.label.isEmpty {
+                    entries.append("\(name)=\(element.label)")
                 }
             }
         }
@@ -180,7 +188,7 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
         if let widget = waitForResult(app, compoundLabel, timeout: 8) {
             return widget
         }
-        return waitForControl(app, widgetLabel, timeout: 3)
+        return waitForResult(app, widgetLabel, timeout: 3)
     }
 
     private func waitForResult(_ app: XCUIApplication, _ label: String, timeout: TimeInterval) -> XCUIElement? {
