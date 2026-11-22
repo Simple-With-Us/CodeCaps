@@ -87,9 +87,12 @@ public struct LocalQuotaReader: Sendable {
     }
 
     /// Reads all configured local sources concurrently.  This method never
-    /// refreshes OAuth credentials itself and never posts telemetry.  The one
-    /// exception is asking Claude Code to recover its own unavailable login, which
-    /// Claude Code performs and writes on its own.  The Antigravity handoff runs
+    /// posts telemetry, and it renews exactly one credential: Claude Code's.
+    /// When the saved login is expired but renewable, the renewal runs the
+    /// OAuth refresh grant itself and writes the refreshed record back to
+    /// the store it came from (see `ClaudeCredentialRenewer`); when that
+    /// cannot run, it asks Claude Code to recover its own login instead.
+    /// The Antigravity handoff runs
     /// only the npm `antigravity-usage` reader backed by its own saved login - a
     /// silent HTTPS token refresh - and never a sign-in-capable CLI; without that
     /// login the provider reports a consent need instead of spawning anything.
@@ -145,8 +148,9 @@ public struct LocalQuotaReader: Sendable {
             renewable = ClaudeOAuthParser.isRenewable(in: file, now: now())
                 || ClaudeOAuthParser.isRenewable(in: keychainRoot, now: now())
             // A failed credential read does not prove Claude Code is signed out.
-            // Let its quota-only command try its own login even when CodeCaps
-            // cannot see a refresh token, then reread the result.
+            // Renew the saved login — the direct grant first, Claude Code's
+            // own quota-only command when the grant cannot run — even when
+            // CodeCaps cannot see a refresh token, then reread the result.
             // The existing throttle bounds repeated attempts and shares a run.
             try Task.checkCancellation()
             if candidate == nil,
@@ -176,8 +180,9 @@ public struct LocalQuotaReader: Sendable {
             payload = try await requestJSON(request)
         } catch LocalReaderError.reauth {
             // A usage 401 or 403 is never the generic "sign in again" sentence.
-            // Invalidate remembered bytes and let Claude Code try its own login
-            // without requiring CodeCaps to see a refresh token first.
+            // Invalidate remembered bytes and renew the login — the direct
+            // grant first, Claude Code's own run as fallback — without
+            // requiring CodeCaps to see a refresh token first.
             // A rejected readable token is not a Keychain consent failure.
             ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
             var recoveryFile = file
@@ -1128,11 +1133,27 @@ private extension LocalQuotaReader {
         }
     }
 
+    /// Renews Claude Code's expired login.  The direct OAuth refresh grant
+    /// runs first (`ClaudeCredentialRenewer`): it is the renewal Claude Code
+    /// itself performs, and unlike a Claude Code run it needs no session to
+    /// start.  The Claude Code run below remains as the fallback for the
+    /// cases the grant cannot cover — no refresh token readable, a refused
+    /// grant, no network — where asking Claude Code to recover its own
+    /// login is still better than reporting idle.
+    static func makeClaudeRenewer(homeDirectory: URL) -> @Sendable () async -> Void {
+        let direct = ClaudeCredentialRenewer.live(homeDirectory: homeDirectory)
+        let claudeCodeRun = makeClaudeCodeRenewalRun(homeDirectory: homeDirectory)
+        return {
+            if await direct.refresh() { return }
+            await claudeCodeRun()
+        }
+    }
+
     /// Asks Claude Code to renew its own expired login.  `/usage` costs no
     /// model tokens and no quota, but starting a session makes Claude Code
     /// refresh and rewrite its own saved login.  Output is discarded unread,
     /// and a missing binary or any failure quietly does nothing.
-    static func makeClaudeRenewer(homeDirectory: URL) -> @Sendable () async -> Void {
+    static func makeClaudeCodeRenewalRun(homeDirectory: URL) -> @Sendable () async -> Void {
         let candidates = [
             homeDirectory.appendingPathComponent(".local/bin/claude").path,
             "/opt/homebrew/bin/claude",
