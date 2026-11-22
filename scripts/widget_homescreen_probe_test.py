@@ -363,6 +363,19 @@ class SeedAndResultTests(unittest.TestCase):
         self.assertEqual(outcome_code(outcome), EXIT_UNSUPPORTED)
         self.assertIn("Edit control missing", message)
 
+    def test_gallery_failure_with_on_screen_inventory_stays_a_refusal(self):
+        log = (
+            "error: -[WidgetHomeScreenProbeUITests testHomeScreenRendersSeededQuota] : "
+            "failed - unsupported-path: Edit control missing after long-press; "
+            "on-screen: button=Allow | staticText=CodeCaps\n"
+            "** TEST FAILED **\n"
+        )
+        outcome, message = interpret_log(log, 12000)
+        self.assertEqual(outcome, Outcome.UNSUPPORTED)
+        self.assertEqual(outcome_code(outcome), EXIT_UNSUPPORTED)
+        self.assertIn("Edit control missing", message)
+        self.assertIn("on-screen: button=Allow", message)
+
     def test_success_without_a_screenshot_is_a_failure(self):
         log = (
             "Test Case '-[WidgetHomeScreenProbeUITests testHomeScreenRendersSeededQuota]' started.\n"
@@ -806,6 +819,25 @@ class ProjectAndContractTests(unittest.TestCase):
         self.assertIn("existingResult", swift)
         self.assertIn('configurationDisplayName("AI Subscription Overview")', bundle)
         self.assertIn("AI Subscription Overview", swift)
+
+    def test_swift_gallery_contract_declines_the_permission_alert_first(self):
+        swift = (PROBE_SOURCES / "UITests" / "WidgetHomeScreenProbeUITests.swift").read_text(encoding="utf-8")
+        # The decline button's label carries a U+2019 apostrophe, written in
+        # the Swift source as an escape so the label stays byte-exact.
+        self.assertIn('doNotAllowLabel = "Don\\u{2019}t Allow"', swift)
+        self.assertIn("dismissPermissionAlert", swift)
+        # The alert is modal: the dismissal must run before the long-press,
+        # or the press never reaches the Home Screen and no Edit control
+        # exists.  An alert that will not dismiss stays an exit-78 refusal.
+        self.assertLess(
+            swift.index("dismissPermissionAlert(springboard)"),
+            swift.index("press(forDuration: 2.0)"),
+        )
+        self.assertIn(
+            "unsupported-path: notification permission alert could not be dismissed", swift)
+        # A contract failure names what SpringBoard actually presented.
+        self.assertIn("elementInventory", swift)
+        self.assertIn("on-screen:", swift)
 
     def test_off_device_widget_probe_still_compiles_the_real_views(self):
         text = (ROOT / "scripts/test-widget-ui-native.sh").read_text(encoding="utf-8")
