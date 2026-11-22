@@ -56,32 +56,32 @@ final class WidgetHomeScreenProbeUITests: XCTestCase {
 
         let search = springboard.searchFields.firstMatch
         guard search.waitForExistence(timeout: 8) else {
-            XCTFail("unsupported-path: widget gallery search field missing")
+            XCTFail("unsupported-path: widget gallery search field missing; on-screen: \(elementInventory(springboard))")
             return
         }
         tap(search)
         search.typeText(appLabel)
 
         guard let widget = waitForWidgetResult(springboard) else {
-            XCTFail("unsupported-path: CodeCaps widget missing from gallery search")
+            XCTFail("unsupported-path: CodeCaps widget missing from gallery search; on-screen: \(elementInventory(springboard))")
             return
         }
         tap(widget)
 
         guard let confirm = waitForControl(springboard, addWidgetLabel, timeout: 8) else {
-            XCTFail("unsupported-path: gallery confirm Add Widget missing")
+            XCTFail("unsupported-path: gallery confirm Add Widget missing; on-screen: \(elementInventory(springboard))")
             return
         }
         tap(confirm)
 
         guard let done = waitForControl(springboard, doneLabel, timeout: 8) else {
-            XCTFail("unsupported-path: Done control missing after add")
+            XCTFail("unsupported-path: Done control missing after add; on-screen: \(elementInventory(springboard))")
             return
         }
         tap(done)
 
         if springboard.searchFields.firstMatch.exists {
-            XCTFail("unsupported-path: widget gallery search field still present after add")
+            XCTFail("unsupported-path: widget gallery search field still present after add; on-screen: \(elementInventory(springboard))")
             return
         }
 
