@@ -89,11 +89,35 @@ public enum UsageMonitorPushMetadata {
         if provider == "minimax", let model = window.modelId {
             return "minimax:\(model)"
         }
+        // Antigravity publishes four pooled windows (Gemini and Third-Party, 5h
+        // and weekly) that carry no model id.  Bucketing them by the bare
+        // cadence made Gemini 5h and Third-Party 5h one bucket, and Gemini
+        // weekly and Third-Party weekly another, so the server kept one window
+        // of each pair and the phone drew a single bar per pool.  The pool
+        // stays in the bucket, in the ids the server and
+        // AntigravityQuotaGroups.pool already read (`gemini-5h`, `3p-weekly`).
+        if provider == "google-antigravity", let cadence = window.window,
+           let pool = antigravityPoolPrefix(window) {
+            return "\(pool)-\(cadence)"
+        }
         if let modelId = window.modelId, !modelId.isEmpty {
             let cadence = window.window ?? "window"
             return "\(modelId)-\(cadence)"
         }
         return window.window ?? window.label.lowercased().replacingOccurrences(of: " ", with: "-")
+    }
+
+    private static func antigravityPoolPrefix(_ window: QuotaWindow) -> String? {
+        var family = window.modelType?.lowercased()
+        if family == nil || family?.isEmpty == true {
+            let parts = window.id.lowercased().split(separator: ":").map(String.init)
+            if parts.count >= 3, parts[0] == "antigravity" { family = parts[1] }
+        }
+        switch family {
+        case "gemini": return "gemini"
+        case "third-party": return "3p"
+        default: return nil
+        }
     }
 
     private static func anthropicRateLimitKey(from window: QuotaWindow) -> String? {
