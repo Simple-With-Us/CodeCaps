@@ -134,4 +134,36 @@ final class UsageMonitorPushMetadataTests: XCTestCase {
         XCTAssertEqual(meta["source"] as? String, "codecaps")
         XCTAssertEqual(meta["machine"] as? String, "Test-Mac")
     }
+
+    func testAntigravityPoolWindowsKeepDistinctBuckets() {
+        func pooled(_ family: String, _ period: String) -> QuotaWindow {
+            QuotaWindow(
+                id: "antigravity:\(family):\(period)",
+                provider: "Antigravity",
+                providerKey: "google-antigravity",
+                modelType: family,
+                label: "\(family) \(period)",
+                remainingPercent: 50,
+                window: period,
+                occurredAt: "2026-11-24T19:00:00Z"
+            )
+        }
+        let buckets = [pooled("gemini", "5h"), pooled("gemini", "weekly"),
+                       pooled("third-party", "5h"), pooled("third-party", "weekly")]
+            .map { UsageMonitorPushMetadata.bucketId(for: $0) }
+        XCTAssertEqual(buckets, ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"])
+        XCTAssertEqual(Set(buckets).count, 4)
+    }
+
+    func testAntigravityBucketsNormalizeCadenceAndServerStyleFamilies() {
+        func pooled(_ id: String, _ family: String?, _ token: String) -> QuotaWindow {
+            QuotaWindow(id: id, provider: "Antigravity", providerKey: "google-antigravity",
+                        modelType: family, label: "x", remainingPercent: 50, window: token,
+                        occurredAt: "2026-11-24T19:00:00Z")
+        }
+        XCTAssertEqual(UsageMonitorPushMetadata.bucketId(for: pooled("antigravity:gemini:weekly", "gemini", "7d")), "gemini-weekly")
+        XCTAssertEqual(UsageMonitorPushMetadata.bucketId(for: pooled("antigravity:gemini:weekly", "gemini", "weekly")), "gemini-weekly")
+        XCTAssertEqual(UsageMonitorPushMetadata.bucketId(for: pooled("x", "3p-5h", "5h")), "3p-5h")
+        XCTAssertEqual(UsageMonitorPushMetadata.bucketId(for: pooled("x", "3p-weekly", "weekly")), "3p-weekly")
+    }
 }

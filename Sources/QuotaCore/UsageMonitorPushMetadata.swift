@@ -89,11 +89,38 @@ public enum UsageMonitorPushMetadata {
         if provider == "minimax", let model = window.modelId {
             return "minimax:\(model)"
         }
+        // Antigravity publishes four pooled windows (Gemini and Third-Party, 5h
+        // and weekly) that carry no model id.  Bucketing them by the bare
+        // cadence made Gemini 5h and Third-Party 5h one bucket, and Gemini
+        // weekly and Third-Party weekly another, so the server kept one window
+        // of each pair and the phone drew a single bar per pool.  The pool
+        // stays in the bucket, in the ids the server and
+        // AntigravityQuotaGroups.pool already read (`gemini-5h`, `3p-weekly`).
+        if provider == "google-antigravity", let cadence = window.window,
+           let pool = antigravityPoolPrefix(window) {
+            // Weekly arrives as "weekly" or "7d" depending on the producer path;
+            // the server bucket is always `weekly`.
+            let period = normalizeQuotaWindowToken(cadence)
+            return "\(pool)-\(period == "7d" ? "weekly" : period)"
+        }
         if let modelId = window.modelId, !modelId.isEmpty {
             let cadence = window.window ?? "window"
             return "\(modelId)-\(cadence)"
         }
         return window.window ?? window.label.lowercased().replacingOccurrences(of: " ", with: "-")
+    }
+
+    private static func antigravityPoolPrefix(_ window: QuotaWindow) -> String? {
+        func pool(_ raw: String?) -> String? {
+            guard let family = raw?.lowercased(), !family.isEmpty else { return nil }
+            if family.hasPrefix("gemini") { return "gemini" }
+            if family.hasPrefix("3p") || family.hasPrefix("third") { return "3p" }
+            return nil
+        }
+        if let found = pool(window.modelType) { return found }
+        let parts = window.id.lowercased().split(separator: ":").map(String.init)
+        if parts.count >= 3, parts[0] == "antigravity" { return pool(parts[1]) }
+        return nil
     }
 
     private static func anthropicRateLimitKey(from window: QuotaWindow) -> String? {
