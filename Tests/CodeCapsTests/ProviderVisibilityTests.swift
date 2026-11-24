@@ -92,14 +92,19 @@ final class ProviderVisibilityTests: XCTestCase {
     }
 
     /// Kody, PR #549:  values stored before normalization (or edited by hand)
-    /// must not resurrect a hidden platform after a restart.
+    /// must not resurrect a hidden platform after a restart, and a blank
+    /// entry must not defeat the isEmpty fast path.
     func testStoredNonCanonicalKeysNormalizeOnLoad() async {
         let settings = defaults()
-        settings.set([" Anthropic "], forKey: "hiddenProviderKeys")
+        settings.set([" Anthropic ", "  ", ""], forKey: "hiddenProviderKeys")
         let model = await model(settings,
-                                windows: [window(provider: "Claude", providerKey: "anthropic")])
+                                windows: [window(provider: "Claude", providerKey: "anthropic"),
+                                          window(provider: "Codex", providerKey: "openai")])
         XCTAssertFalse(model.isProviderVisible("anthropic"))
         XCTAssertFalse(model.displaySections.contains { $0.providerKey == "anthropic" })
+        XCTAssertTrue(model.displaySections.contains { $0.providerKey == "openai" })
+        XCTAssertFalse(model.hiddenProviderKeys.contains(""),
+                       "a blank stored entry is dropped rather than kept as a phantom key")
     }
 
     /// Seer, PR #549:  hiding is display-only.  A hidden platform keeps its

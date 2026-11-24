@@ -846,10 +846,11 @@ final class MonitorModel: ObservableObject {
         }
         disabledSources = Set((defaults.stringArray(forKey: "disabledSources") ?? []))
         // Normalize on load, matching setProviderVisible:  values written by an
-        // older format or by hand must not resurrect a hidden platform.
-        hiddenProviderKeys = Set((defaults.stringArray(forKey: "hiddenProviderKeys") ?? []).map {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        })
+        // older format or by hand must not resurrect a hidden platform, and a
+        // blank entry must not defeat the isEmpty fast path.
+        hiddenProviderKeys = Set((defaults.stringArray(forKey: "hiddenProviderKeys") ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty })
         optionalQuotaReaderPreferences = QuotaReaderPreferences.load(from: defaults)
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
         glanceLogosFollowAccent = defaults.bool(forKey: "glanceLogosFollowAccent")
@@ -1390,6 +1391,7 @@ final class MonitorModel: ObservableObject {
     /// refreshing either way; hiding only affects display surfaces.
     func setProviderVisible(_ visible: Bool, providerKey: String) {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return }
         var hidden = hiddenProviderKeys
         if visible { hidden.remove(key) } else { hidden.insert(key) }
         guard hidden != hiddenProviderKeys else { return }
@@ -1722,7 +1724,9 @@ final class MonitorModel: ObservableObject {
                 // last refresh: read again now, so the alarm rings on time
                 // rather than up to five minutes late.
                 let lastChecked = self.lastChecked ?? .distantPast
-                let pendingReset = self.displaySections.contains { row in
+                // Unfiltered rows:  a platform hidden from the dashboard
+                // still refreshes on time when its reset comes due.
+                let pendingReset = self.unfilteredDisplaySections.contains { row in
                     self.isAlarmEnabled(for: row.id) && row.section.windows.contains { snapshot in
                         guard let reset = snapshot.resetAt else { return false }
                         return reset <= self.now && reset > lastChecked
