@@ -845,7 +845,11 @@ final class MonitorModel: ObservableObject {
             sourceRank = [:]
         }
         disabledSources = Set((defaults.stringArray(forKey: "disabledSources") ?? []))
-        hiddenProviderKeys = Set((defaults.stringArray(forKey: "hiddenProviderKeys") ?? []))
+        // Normalize on load, matching setProviderVisible:  values written by an
+        // older format or by hand must not resurrect a hidden platform.
+        hiddenProviderKeys = Set((defaults.stringArray(forKey: "hiddenProviderKeys") ?? []).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        })
         optionalQuotaReaderPreferences = QuotaReaderPreferences.load(from: defaults)
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
         glanceLogosFollowAccent = defaults.bool(forKey: "glanceLogosFollowAccent")
@@ -955,18 +959,22 @@ final class MonitorModel: ObservableObject {
     }
     /// One row per platform, except Antigravity, which is one row per pool.
     /// Every surface that lists platforms reads this rather than `sections`.
+    /// All platform rows, before the owner's hidden set is applied.  Alarm
+    /// and anomaly surfaces read this:  a hidden platform is display-only
+    /// hidden, so its reset bells and runaway alerts keep working.
+    var unfilteredDisplaySections: [DisplaySection] {
+        if let rows = sectionsCache?.displaySections { return rows }
+        let rows = sections.flatMap { DisplaySection.rows(for: $0, now: now) }
+        sectionsCache?.displaySections = rows
+        return rows
+    }
+
     var displaySections: [DisplaySection] {
-        // The cache keeps the unfiltered rows so a display toggle never has
-        // to rebuild anything; the owner's hidden set is applied on top.
-        let unfiltered: [DisplaySection]
-        if let rows = sectionsCache?.displaySections {
-            unfiltered = rows
-        } else {
-            unfiltered = sections.flatMap { DisplaySection.rows(for: $0, now: now) }
-            sectionsCache?.displaySections = unfiltered
-        }
+        let unfiltered = unfilteredDisplaySections
         guard !hiddenProviderKeys.isEmpty else { return unfiltered }
-        return unfiltered.filter { !hiddenProviderKeys.contains($0.providerKey) }
+        // Canonicalize through isProviderVisible, so a raw provider key that
+        // differs in case or whitespace filters like its canonical form.
+        return unfiltered.filter { isProviderVisible($0.providerKey) }
     }
 
     func historySamples() -> [AnomalyDetector.Sample] {
@@ -1689,7 +1697,9 @@ final class MonitorModel: ObservableObject {
     /// machine's rows in a scope of their own.  Keyed by row, so a provider's
     /// bell covers it in both views.
     func resetAlarmObservationsForCurrentReadings() -> [ResetAlarmObservation] {
-        var observations = displaySections.flatMap { resetAlarmObservations(for: $0, scope: "local") }
+        // Unfiltered rows:  a platform hidden from the dashboard keeps its
+        // reset bell, because hiding is display-only.
+        var observations = unfilteredDisplaySections.flatMap { resetAlarmObservations(for: $0, scope: "local") }
         for group in fleetGroups {
             observations += group.rows.flatMap { resetAlarmObservations(for: $0, scope: "fleet:\(group.id)") }
         }

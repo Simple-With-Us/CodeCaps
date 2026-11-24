@@ -90,4 +90,32 @@ final class ProviderVisibilityTests: XCTestCase {
         XCTAssertFalse(model.isProviderVisible("anthropic"))
         XCTAssertFalse(model.displaySections.contains { $0.providerKey == "anthropic" })
     }
+
+    /// Kody, PR #549:  values stored before normalization (or edited by hand)
+    /// must not resurrect a hidden platform after a restart.
+    func testStoredNonCanonicalKeysNormalizeOnLoad() async {
+        let settings = defaults()
+        settings.set([" Anthropic "], forKey: "hiddenProviderKeys")
+        let model = await model(settings,
+                                windows: [window(provider: "Claude", providerKey: "anthropic")])
+        XCTAssertFalse(model.isProviderVisible("anthropic"))
+        XCTAssertFalse(model.displaySections.contains { $0.providerKey == "anthropic" })
+    }
+
+    /// Seer, PR #549:  hiding is display-only.  A hidden platform keeps its
+    /// reset-alarm observations, so its bell still rings.
+    func testHiddenPlatformKeepsResetAlarmObservations() async {
+        let settings = defaults()
+        let iso = ISO8601DateFormatter()
+        var claude = window(provider: "Claude", providerKey: "anthropic")
+        claude.resetAt = iso.string(from: Date().addingTimeInterval(3600))
+        let model = await model(settings, windows: [claude])
+        let before = model.resetAlarmObservationsForCurrentReadings()
+        XCTAssertEqual(before.filter { $0.providerId == "anthropic" }.count, 1)
+        model.setProviderVisible(false, providerKey: "anthropic")
+        XCTAssertTrue(model.displaySections.isEmpty)
+        let after = model.resetAlarmObservationsForCurrentReadings()
+        XCTAssertEqual(after.filter { $0.providerId == "anthropic" }.count, 1,
+                       "a hidden platform keeps its reset alarm")
+    }
 }
