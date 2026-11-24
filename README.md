@@ -66,6 +66,8 @@ Each reset alarms once.  The state behind it is saved on every refresh, so a res
 | Grok CLI | Billing/credits, via Grok's CLI proxy | `~/.grok/auth.json` |
 | Grok Bot | Weekly usage, via Cursor's dashboard service | Same Cursor session database, a different endpoint |
 | MiniMax | Per-model and weekly remaining quota | `~/.mmx/config.json` |
+| GitHub Copilot | Premium requests, chat, and completions snapshots, plus the plan and reset date | `gh api --hostname github.com /copilot_internal/user`, using the existing GitHub CLI sign-in |
+| Kimi Code | Subscription quota | HTTPS usage endpoint, using the access token the Kimi CLI already wrote under `~/.kimi-code/credentials/` (or `~/.kimi/credentials/`) |
 | DeepSeek | Not supported | Balance-based, not window-based.  No local reader; a pulled window is filtered out too — never appears anywhere. |
 
 None of the above ever asks for a typed credential — every reader reuses a session or file the CLI already created.
