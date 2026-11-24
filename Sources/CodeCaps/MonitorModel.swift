@@ -644,6 +644,14 @@ final class MonitorModel: ObservableObject {
     @Published var disabledSources: Set<String> {
         didSet { defaults.set(Array(disabledSources), forKey: "disabledSources") }
     }
+    /// Platform (canonical provider) keys the owner has hidden from the
+    /// dashboard.  Hidden platforms are dropped from `freshWindows` and
+    /// `displaySections` — the menu bar, the Glance popover, and the Console
+    /// cards — but they are still observed, so re-enabling one restores its
+    /// rows on the next refresh without re-pairing.
+    @Published var hiddenProviderKeys: Set<String> {
+        didSet { defaults.set(Array(hiddenProviderKeys), forKey: "hiddenProviderKeys") }
+    }
     @Published private(set) var optionalQuotaReaderPreferences: QuotaReaderPreferences
 
     public let alarmManager: ResetAlarmManager
@@ -837,6 +845,12 @@ final class MonitorModel: ObservableObject {
             sourceRank = [:]
         }
         disabledSources = Set((defaults.stringArray(forKey: "disabledSources") ?? []))
+        // Normalize on load, matching setProviderVisible:  values written by an
+        // older format or by hand must not resurrect a hidden platform, and a
+        // blank entry must not defeat the isEmpty fast path.
+        hiddenProviderKeys = Set((defaults.stringArray(forKey: "hiddenProviderKeys") ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty })
         optionalQuotaReaderPreferences = QuotaReaderPreferences.load(from: defaults)
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
         glanceLogosFollowAccent = defaults.bool(forKey: "glanceLogosFollowAccent")
@@ -946,11 +960,22 @@ final class MonitorModel: ObservableObject {
     }
     /// One row per platform, except Antigravity, which is one row per pool.
     /// Every surface that lists platforms reads this rather than `sections`.
-    var displaySections: [DisplaySection] {
+    /// All platform rows, before the owner's hidden set is applied.  Alarm
+    /// and anomaly surfaces read this:  a hidden platform is display-only
+    /// hidden, so its reset bells and runaway alerts keep working.
+    var unfilteredDisplaySections: [DisplaySection] {
         if let rows = sectionsCache?.displaySections { return rows }
         let rows = sections.flatMap { DisplaySection.rows(for: $0, now: now) }
         sectionsCache?.displaySections = rows
         return rows
+    }
+
+    var displaySections: [DisplaySection] {
+        let unfiltered = unfilteredDisplaySections
+        guard !hiddenProviderKeys.isEmpty else { return unfiltered }
+        // Canonicalize through isProviderVisible, so a raw provider key that
+        // differs in case or whitespace filters like its canonical form.
+        return unfiltered.filter { isProviderVisible($0.providerKey) }
     }
 
     func historySamples() -> [AnomalyDetector.Sample] {
@@ -1002,6 +1027,7 @@ final class MonitorModel: ObservableObject {
             $0.isFresh && $0.window.hasReading && !$0.window.isSupplementaryVideoQuota
                 && !masked.contains($0.window.id)
                 && rowIssue(for: $0.window.canonicalProviderKey) == nil
+                && !hiddenProviderKeys.contains($0.window.canonicalProviderKey)
                 && !disabledSources.contains($0.window.source ?? "")
         }
         // Order by provider rank, then by source rank within the provider, so
@@ -1354,6 +1380,24 @@ final class MonitorModel: ObservableObject {
         if localEnabled && providerChecksEnabled && isOptionalQuotaReaderEnabled("zcode") { refreshProviderChecks() }
     }
 
+    /// Whether the platform is currently shown in the dashboard (Glance
+    /// popover, Console cards, and menu-bar candidates).
+    func isProviderVisible(_ providerKey: String) -> Bool {
+        !hiddenProviderKeys.contains(
+            providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    /// Show or hide a whole platform in the dashboard.  The platform keeps
+    /// refreshing either way; hiding only affects display surfaces.
+    func setProviderVisible(_ visible: Bool, providerKey: String) {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return }
+        var hidden = hiddenProviderKeys
+        if visible { hidden.remove(key) } else { hidden.insert(key) }
+        guard hidden != hiddenProviderKeys else { return }
+        hiddenProviderKeys = hidden
+    }
+
     func setSourceEnabled(_ enabled: Bool, _ source: String, for providerKey: String) {
         var disabled = disabledSources
         if enabled { disabled.remove(source) } else { disabled.insert(source) }
@@ -1655,7 +1699,9 @@ final class MonitorModel: ObservableObject {
     /// machine's rows in a scope of their own.  Keyed by row, so a provider's
     /// bell covers it in both views.
     func resetAlarmObservationsForCurrentReadings() -> [ResetAlarmObservation] {
-        var observations = displaySections.flatMap { resetAlarmObservations(for: $0, scope: "local") }
+        // Unfiltered rows:  a platform hidden from the dashboard keeps its
+        // reset bell, because hiding is display-only.
+        var observations = unfilteredDisplaySections.flatMap { resetAlarmObservations(for: $0, scope: "local") }
         for group in fleetGroups {
             observations += group.rows.flatMap { resetAlarmObservations(for: $0, scope: "fleet:\(group.id)") }
         }
@@ -1678,7 +1724,9 @@ final class MonitorModel: ObservableObject {
                 // last refresh: read again now, so the alarm rings on time
                 // rather than up to five minutes late.
                 let lastChecked = self.lastChecked ?? .distantPast
-                let pendingReset = self.displaySections.contains { row in
+                // Unfiltered rows:  a platform hidden from the dashboard
+                // still refreshes on time when its reset comes due.
+                let pendingReset = self.unfilteredDisplaySections.contains { row in
                     self.isAlarmEnabled(for: row.id) && row.section.windows.contains { snapshot in
                         guard let reset = snapshot.resetAt else { return false }
                         return reset <= self.now && reset > lastChecked

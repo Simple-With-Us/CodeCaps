@@ -279,7 +279,7 @@ struct SettingsPlatformsPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Drag to reorder." + sentenceGap
-                 + "This order is used in the quota list and in the Docked Bar.")
+                 + "A platform's switch hides it from the dashboard — the quota list, the Docked Bar, and the menu bar — without stopping its refreshes.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -296,8 +296,22 @@ struct SettingsPlatformsPage: View {
                             .accessibilityHidden(true)
                         PlatformLogo(providerKey: providerKey, size: 16,
                                      style: model.markStyle(for: providerKey))
-                        Text(label(for: providerKey)).font(.subheadline.weight(.medium))
+                        Text(label(for: providerKey))
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(model.isProviderVisible(providerKey) ? Theme.ink : .secondary)
                         Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { model.isProviderVisible(providerKey) },
+                            set: { model.setProviderVisible($0, providerKey: providerKey) }))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .help(model.isProviderVisible(providerKey)
+                                  ? "Hide \(label(for: providerKey)) from the dashboard"
+                                  : "Show \(label(for: providerKey)) in the dashboard")
+                            .accessibilityLabel(model.isProviderVisible(providerKey)
+                                                ? "Hide \(label(for: providerKey)) from the dashboard"
+                                                : "Show \(label(for: providerKey)) in the dashboard")
                     }
                     .tag(providerKey)
                     .accessibilityLabel("\(label(for: providerKey)), position \((orderedKeys.firstIndex(of: providerKey) ?? 0) + 1) of \(orderedKeys.count)")
