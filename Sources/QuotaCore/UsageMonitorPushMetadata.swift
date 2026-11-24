@@ -98,7 +98,10 @@ public enum UsageMonitorPushMetadata {
         // AntigravityQuotaGroups.pool already read (`gemini-5h`, `3p-weekly`).
         if provider == "google-antigravity", let cadence = window.window,
            let pool = antigravityPoolPrefix(window) {
-            return "\(pool)-\(cadence)"
+            // Weekly arrives as "weekly" or "7d" depending on the producer path;
+            // the server bucket is always `weekly`.
+            let period = normalizeQuotaWindowToken(cadence)
+            return "\(pool)-\(period == "7d" ? "weekly" : period)"
         }
         if let modelId = window.modelId, !modelId.isEmpty {
             let cadence = window.window ?? "window"
@@ -108,16 +111,16 @@ public enum UsageMonitorPushMetadata {
     }
 
     private static func antigravityPoolPrefix(_ window: QuotaWindow) -> String? {
-        var family = window.modelType?.lowercased()
-        if family == nil || family?.isEmpty == true {
-            let parts = window.id.lowercased().split(separator: ":").map(String.init)
-            if parts.count >= 3, parts[0] == "antigravity" { family = parts[1] }
+        func pool(_ raw: String?) -> String? {
+            guard let family = raw?.lowercased(), !family.isEmpty else { return nil }
+            if family.hasPrefix("gemini") { return "gemini" }
+            if family.hasPrefix("3p") || family.hasPrefix("third") { return "3p" }
+            return nil
         }
-        switch family {
-        case "gemini": return "gemini"
-        case "third-party": return "3p"
-        default: return nil
-        }
+        if let found = pool(window.modelType) { return found }
+        let parts = window.id.lowercased().split(separator: ":").map(String.init)
+        if parts.count >= 3, parts[0] == "antigravity" { return pool(parts[1]) }
+        return nil
     }
 
     private static func anthropicRateLimitKey(from window: QuotaWindow) -> String? {
