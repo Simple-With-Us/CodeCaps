@@ -44,16 +44,16 @@ final class ProviderVisibilityTests: XCTestCase {
         let settings = defaults()
         let model = await model(settings, windows: [
             window(provider: "Claude", providerKey: "anthropic"),
-            window(provider: "Codex", providerKey: "openai")])
+            window(provider: "MiniMax", providerKey: "minimax")])
         model.setProviderVisible(false, providerKey: "anthropic")
         XCTAssertFalse(model.isProviderVisible("anthropic"))
-        XCTAssertTrue(model.isProviderVisible("openai"))
+        XCTAssertTrue(model.isProviderVisible("minimax"))
         XCTAssertFalse(model.displaySections.contains { $0.providerKey == "anthropic" },
                        "a hidden platform leaves the dashboard rows")
-        XCTAssertTrue(model.displaySections.contains { $0.providerKey == "openai" })
+        XCTAssertTrue(model.displaySections.contains { $0.providerKey == "minimax" })
         XCTAssertFalse(model.freshWindows.contains { $0.window.canonicalProviderKey == "anthropic" },
                        "a hidden platform cannot be picked for the menu bar")
-        XCTAssertTrue(model.freshWindows.contains { $0.window.canonicalProviderKey == "openai" })
+        XCTAssertTrue(model.freshWindows.contains { $0.window.canonicalProviderKey == "minimax" })
         // The platform is still observed:  its reading stays in the response.
         XCTAssertTrue(model.response.windows.contains { $0.canonicalProviderKey == "anthropic" })
     }
@@ -61,14 +61,14 @@ final class ProviderVisibilityTests: XCTestCase {
     func testVisibilityPreferencePersistsAcrossRestart() async {
         let settings = defaults()
         let windows = [window(provider: "Claude", providerKey: "anthropic"),
-                       window(provider: "Codex", providerKey: "openai")]
+                       window(provider: "MiniMax", providerKey: "minimax")]
         let first = await model(settings, windows: windows)
         first.setProviderVisible(false, providerKey: "anthropic")
 
         let restored = await model(settings, windows: windows)
         XCTAssertFalse(restored.isProviderVisible("anthropic"))
         XCTAssertFalse(restored.displaySections.contains { $0.providerKey == "anthropic" })
-        XCTAssertTrue(restored.isProviderVisible("openai"))
+        XCTAssertTrue(restored.isProviderVisible("minimax"))
     }
 
     func testShowingAHiddenPlatformRestoresItsRows() async {
@@ -76,11 +76,13 @@ final class ProviderVisibilityTests: XCTestCase {
         let windows = [window(provider: "Claude", providerKey: "anthropic")]
         let model = await model(settings, windows: windows)
         model.setProviderVisible(false, providerKey: "anthropic")
-        XCTAssertTrue(model.displaySections.isEmpty)
+        // Expected-but-unreported platforms keep placeholder rows, so the
+        // assertion is about this platform's row, not an empty dashboard.
+        XCTAssertFalse(model.displaySections.contains { $0.providerKey == "anthropic" })
         model.setProviderVisible(true, providerKey: "anthropic")
         XCTAssertTrue(model.isProviderVisible("anthropic"))
-        XCTAssertEqual(model.displaySections.map(\.providerKey), ["anthropic"])
-        XCTAssertEqual(model.freshWindows.count, 1)
+        XCTAssertTrue(model.displaySections.contains { $0.providerKey == "anthropic" })
+        XCTAssertEqual(model.freshWindows.filter { $0.window.canonicalProviderKey == "anthropic" }.count, 1)
     }
 
     func testCaseAndWhitespaceAreCanonicalized() async {
@@ -99,10 +101,10 @@ final class ProviderVisibilityTests: XCTestCase {
         settings.set([" Anthropic ", "  ", ""], forKey: "hiddenProviderKeys")
         let model = await model(settings,
                                 windows: [window(provider: "Claude", providerKey: "anthropic"),
-                                          window(provider: "Codex", providerKey: "openai")])
+                                          window(provider: "MiniMax", providerKey: "minimax")])
         XCTAssertFalse(model.isProviderVisible("anthropic"))
         XCTAssertFalse(model.displaySections.contains { $0.providerKey == "anthropic" })
-        XCTAssertTrue(model.displaySections.contains { $0.providerKey == "openai" })
+        XCTAssertTrue(model.displaySections.contains { $0.providerKey == "minimax" })
         XCTAssertFalse(model.hiddenProviderKeys.contains(""),
                        "a blank stored entry is dropped rather than kept as a phantom key")
     }
@@ -118,7 +120,7 @@ final class ProviderVisibilityTests: XCTestCase {
         let before = model.resetAlarmObservationsForCurrentReadings()
         XCTAssertEqual(before.filter { $0.providerId == "anthropic" }.count, 1)
         model.setProviderVisible(false, providerKey: "anthropic")
-        XCTAssertTrue(model.displaySections.isEmpty)
+        XCTAssertFalse(model.displaySections.contains { $0.providerKey == "anthropic" })
         let after = model.resetAlarmObservationsForCurrentReadings()
         XCTAssertEqual(after.filter { $0.providerId == "anthropic" }.count, 1,
                        "a hidden platform keeps its reset alarm")
