@@ -26,6 +26,13 @@ private final class MockSyncProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+private final class AttemptCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; count += 1; return count }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+}
+
 final class QuotaPublisherTests: XCTestCase {
     override func tearDown() {
         MockSyncProtocol.requestHandler = nil
@@ -292,6 +299,43 @@ final class QuotaPublisherTests: XCTestCase {
         XCTAssertEqual(result.statusCode, 200)
         XCTAssertEqual(result.count, 2)
         XCTAssertEqual(result.message, "Synced 2 quotas (2 persisted, 0 duplicates, 0 pruned).")
+    }
+
+    func testPublishRetriesTransientGatewayStatusForV2() async throws {
+        let responseData = try JSONSerialization.data(withJSONObject: acknowledgment())
+        let counter = AttemptCounter()
+        MockSyncProtocol.requestHandler = { request in
+            let status = counter.next() < 3 ? 503 : 200
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            return (response, status == 200 ? responseData : Data())
+        }
+        let publisher = QuotaPublisher(urlProtocolClasses: [MockSyncProtocol.self])
+        let result = try await publisher.publish(
+            windows: makeSampleWindows(),
+            to: URL(string: "https://usage.example.com/api/ingest/usage")!, token: "test-ingest-token")
+        XCTAssertEqual(counter.value, 3)
+        XCTAssertEqual(result.statusCode, 200)
+    }
+
+    func testPublishDoesNotRetryGenericWebhook() async {
+        let counter = AttemptCounter()
+        MockSyncProtocol.requestHandler = { request in
+            _ = counter.next()
+            let response = HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+        let publisher = QuotaPublisher(urlProtocolClasses: [MockSyncProtocol.self])
+        do {
+            _ = try await publisher.publish(
+                windows: makeSampleWindows(),
+                to: URL(string: "https://usage.example.com/hook")!, format: .genericWebhook)
+            XCTFail("a 503 must surface")
+        } catch let error as QuotaPublisherError {
+            guard case .httpStatus(503, _) = error else { return XCTFail("unexpected error: \(error)") }
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertEqual(counter.value, 1)
     }
 
     func testPublishRejectsMalformedSuccessfulResponses() async {

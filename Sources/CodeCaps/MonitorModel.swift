@@ -1351,7 +1351,13 @@ final class MonitorModel: ObservableObject {
     }
 
     func setOptionalQuotaReaderEnabled(_ enabled: Bool, readerID: String) {
-        guard LocalQuotaReaderRegistry.builtIn.optionalRegistrations.contains(where: { $0.id == readerID }),
+        // Consult a freshly configured registry, not the launch-time
+        // `builtIn` snapshot, so a plugin file dropped into the Plugins
+        // folder can be toggled without relaunching the app.  Building the
+        // registry only creates factory closures; none is invoked here.
+        let live = LocalQuotaReaderRegistry.configured(
+            zCodeCredentialProvider: { nil }, mimoCredentialProvider: { nil })
+        guard live.optionalRegistrations.contains(where: { $0.id == readerID }),
               optionalQuotaReaderPreferences.isEnabled(readerID) != enabled else { return }
         var preferences = optionalQuotaReaderPreferences
         preferences.setEnabled(enabled, for: readerID)
@@ -1359,10 +1365,15 @@ final class MonitorModel: ObservableObject {
         preferences.save(to: defaults)
         invalidateRefresh()
         if !enabled, let providerResult {
+            // Built-in optional readers use their provider key as their id;
+            // a plugin's id is `plugin:<slug>` while its windows carry its
+            // own provider key, so resolve the key before purging.
+            let providerKey = live.optionalRegistrations
+                .first { $0.id == readerID }?.configurationMetadata["providerKey"] ?? readerID
             self.providerResult = LocalQuotaResult(
-                windows: providerResult.windows.filter { $0.canonicalProviderKey != readerID },
-                issues: providerResult.issues.filter { $0.key != readerID },
-                consentNeeded: providerResult.consentNeeded.subtracting([readerID]))
+                windows: providerResult.windows.filter { $0.canonicalProviderKey != providerKey },
+                issues: providerResult.issues.filter { $0.key != providerKey },
+                consentNeeded: providerResult.consentNeeded.subtracting([providerKey]))
             rebuildLocalState(recordSamples: false)
         }
         if providerChecksEnabled || serverEnabled { refreshProviderChecks() }
@@ -3374,6 +3385,11 @@ final class MonitorModel: ObservableObject {
         })
     }
 
+    /// How long one snapshot write waits for its predecessor before giving
+    /// up.  The write itself is a bounded file replace; only a stuck disk
+    /// can hold a link this long.
+    static let snapshotWritePredecessorTimeout: Duration = .seconds(10)
+
     /// Runs `work` on a background executor after every previously enqueued
     /// write, then reports success back on the main actor.
     func enqueueSnapshotWrite(_ work: @escaping @Sendable () throws -> Void,
@@ -3381,7 +3397,18 @@ final class MonitorModel: ObservableObject {
         guard !snapshotWritesClosedForTermination else { return }
         let previous = snapshotWriteChain
         snapshotWriteChain = Task.detached(priority: .utility) {
-            await previous?.value
+            // A predecessor stuck on a disk write must not stall every later
+            // handoff and widget write indefinitely while the stale file
+            // still looks current.  Wait with a deadline: on timeout this
+            // link reports failure (which surfaces as the handoff/widget
+            // error) and completes, so the chain behind it moves again.  The
+            // skipped write is superseded by the next refresh's snapshot.
+            let predecessorFinished = await SnapshotWriteDrain.wait(
+                for: previous, timeout: Self.snapshotWritePredecessorTimeout)
+            guard predecessorFinished else {
+                await completion(false)
+                return
+            }
             let succeeded: Bool
             do { try work(); succeeded = true } catch { succeeded = false }
             await completion(succeeded)

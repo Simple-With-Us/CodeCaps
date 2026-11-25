@@ -94,7 +94,8 @@ public struct LocalQuotaReaderRegistry: Sendable {
 
     public static func configured(
         zCodeCredentialProvider: @escaping @Sendable () async -> ZCodeQuotaCredential?,
-        mimoCredentialProvider: @escaping @Sendable () async -> MiMoTokenPlanCredential?
+        mimoCredentialProvider: @escaping @Sendable () async -> MiMoTokenPlanCredential?,
+        pluginDescriptors: [EndpointPluginDescriptor] = EndpointPluginLoader.load()
     ) -> LocalQuotaReaderRegistry {
         LocalQuotaReaderRegistry(registrations: [
             LocalQuotaReaderRegistration(id: "local-primary", label: "Built-In Provider Sessions",
@@ -128,6 +129,12 @@ public struct LocalQuotaReaderRegistry: Sendable {
             LocalQuotaReaderRegistration(id: "mimo-token-plan", label: "Xiaomi MiMo Token Plan", isOptional: true) {
                 MiMoTokenPlanReader(credential: mimoCredentialProvider)
             },
-        ])
+            LocalQuotaReaderRegistration(id: "opencode-go", label: "OpenCode Go", configurationMetadata: ["providerKey": "opencode-go"], isOptional: true) {
+                OpenCodeGoQuotaReader()
+            },
+            // Declarative endpoint plugins come last: a built-in reader for
+            // the same plan always wins, and a plugin's provider key is
+            // validated clear of every built-in key before it can register.
+        ] + EndpointPluginLoader.registrations(descriptors: pluginDescriptors))
     }
 }

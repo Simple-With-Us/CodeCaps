@@ -38,6 +38,26 @@ performs inference. Team and pay-as-you-go keys are not supported. The poll
 preserves Xiaomi’s reported credit balance and exact billing-cycle end rather
 than assuming it is monthly. Do not paste the key into a support report.
 
+MiMo Code is a client of this same plan: signing MiMo Code in with an
+individual Token Plan key and saving that key above monitors the one shared
+allowance. Local `mimo stats` output is consumption history, not remaining
+quota, and is never shown as a quota meter.
+
+## OpenCode Go
+
+Enable **OpenCode Go** in **Settings → Sources & Fleet** after signing in
+with `opencode auth login`. CodeCaps reads the Go key read-only from the
+OpenCode CLI's local auth file and checks OpenCode's documented usage
+endpoint for the rolling five-hour, weekly, and monthly windows. Local
+`opencode stats` output is a consumption estimate, not remaining quota,
+and is never shown as a quota meter.
+
+## Other Plans
+
+Any other subscription whose provider publishes a quota endpoint can be
+added without a CodeCaps update as a declarative endpoint plugin; see
+`docs/ENDPOINT-PLUGINS.md`.
+
 Use these with signed-in test subscriptions to verify the Mac settings and quota
 meters. The fixtures do not prove any specific account or region is eligible.
 The iPhone companion still uses synced snapshots, not these local collectors.
