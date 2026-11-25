@@ -1156,7 +1156,9 @@ struct SettingsLogoStylePage: View {
         if let match = model.displaySections.first(where: { $0.id == rowId }) {
             return match.title
         }
-        if let reader = ReaderStatus.current.first(where: { $0.providerKey == rowId }) {
+        // Built-in rows only here: this label is resolved per row, and the
+        // plugin-inclusive list reads the Plugins folder from disk.
+        if let reader = ReaderStatus.all.first(where: { $0.providerKey == rowId }) {
             return reader.label
         }
         switch rowId {
