@@ -25,7 +25,15 @@ DSN = "https://abc123@o1.ingest.example.test/42"
 SHIP = "iOS TestFlight ship (GitHub-hosted macOS)"
 
 
-def run_reporter(workflow_name, conclusion, action="completed", event="schedule", branch="main"):
+def run_reporter(workflow_name, conclusion, action="completed", event="schedule", branch="main",
+                 workflow_names=None):
+    """Run main() with send_envelope recorded.
+
+    The stale-key drift guard is stubbed to report nothing, so these
+    assertions do not depend on the live checkout's workflow names, unless
+    workflow_names is given: then discover_workflow_names() returns it and the
+    real drift guard runs against it.
+    """
     sent = []
     env = {
         "SENTRY_FLEET_DSN": DSN,
@@ -40,9 +48,14 @@ def run_reporter(workflow_name, conclusion, action="completed", event="schedule"
         "WORKFLOW_RUN_ATTEMPT": "1",
         "GITHUB_TOKEN": "",
     }
+    if workflow_names is None:
+        drift_patch = mock.patch.object(reporter, "find_cron_schedule_drift", return_value=[])
+    else:
+        drift_patch = mock.patch.object(
+            reporter, "discover_workflow_names", return_value=set(workflow_names))
     with mock.patch.object(
         reporter, "send_envelope", lambda url, auth, item_type, payload: sent.append((item_type, payload))
-    ), mock.patch.dict(os.environ, env, clear=False):
+    ), mock.patch.dict(os.environ, env, clear=False), drift_patch:
         rc = reporter.main()
     return rc, sent
 
@@ -56,10 +69,12 @@ class UnmonitoredScheduleTests(unittest.TestCase):
             name = re.search(r"^name:\s*(.+?)\s*$", text, re.MULTILINE)
             if crons and name:
                 found[name.group(1).strip().strip("\"'")] = crons[0].strip()
-        self.assertEqual(set(reporter.UNMONITORED_SCHEDULES) - set(found), set())
+        # Case-folded on both sides, like main() and find_cron_schedule_drift().
+        unmonitored_folded = {name.casefold() for name in reporter.UNMONITORED_SCHEDULES}
+        self.assertEqual(unmonitored_folded - {name.casefold() for name in found}, set())
         self.assertEqual(
             reporter.CRON_SCHEDULES,
-            {name: cron for name, cron in found.items() if name not in reporter.UNMONITORED_SCHEDULES},
+            {name: cron for name, cron in found.items() if name.casefold() not in unmonitored_folded},
         )
 
     def test_requested_sweep_opens_no_checkin_and_raises_no_drift(self):
@@ -83,6 +98,27 @@ class UnmonitoredScheduleTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(len(sent), 1)
         self.assertIn("unmapped-schedule", sent[0][1]["fingerprint"])
+
+
+class ConfigDriftTests(unittest.TestCase):
+    def test_stale_unmonitored_entry_is_reported_like_a_stale_cron_key(self):
+        live = set(reporter.CRON_SCHEDULES)
+        self.assertEqual(
+            reporter.find_cron_schedule_drift(live), sorted(reporter.UNMONITORED_SCHEDULES))
+
+    def test_unmonitored_entry_matches_live_names_case_insensitively(self):
+        live = {name.casefold() for name in reporter.CRON_SCHEDULES}
+        live |= {name.casefold() for name in reporter.UNMONITORED_SCHEDULES}
+        self.assertEqual(reporter.find_cron_schedule_drift(live), [])
+
+    def test_stale_unmonitored_entry_raises_the_stale_cron_key_event(self):
+        rc, sent = run_reporter(
+            "CI", "success", event="push", workflow_names=set(reporter.CRON_SCHEDULES))
+        self.assertEqual(rc, 0)
+        self.assertEqual([item_type for item_type, _ in sent], ["event"])
+        payload = sent[0][1]
+        self.assertEqual(payload["fingerprint"], ["ci-report-config-drift", "codecaps", "stale-cron-key"])
+        self.assertEqual(payload["extra"]["stale_keys"], sorted(reporter.UNMONITORED_SCHEDULES))
 
 
 class FailureThresholdTests(unittest.TestCase):
