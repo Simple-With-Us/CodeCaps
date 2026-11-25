@@ -1021,6 +1021,7 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "kimi", label: "Kimi", source: "Kimi Code credentials", optionalReaderID: "kimi"),
         ReaderStatus(providerKey: "zcode", label: "Z.ai / ZCode", source: "ZCode credentials", optionalReaderID: "zcode"),
         ReaderStatus(providerKey: "alibaba-token-plan", label: "Alibaba Token Plan", source: "Bailian CLI console sign-in", optionalReaderID: "alibaba-token-plan"),
+        ReaderStatus(providerKey: "alibaba-coding-plan", label: "Alibaba Coding Plan (Qwen Code)", source: "Bailian CLI console sign-in", optionalReaderID: "alibaba-coding-plan"),
         ReaderStatus(providerKey: "mimo-token-plan", label: "Xiaomi MiMo Token Plan", source: "MiMo Token Plan key", optionalReaderID: "mimo-token-plan"),
     ]
 }

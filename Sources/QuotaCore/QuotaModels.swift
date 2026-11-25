@@ -1140,6 +1140,7 @@ enum QuotaProviders {
     // users who have not opted into their local readers.
     static let optionalTokenPlanLabels: [String: String] = [
         "alibaba-token-plan": "Alibaba Token Plan",
+        "alibaba-coding-plan": "Alibaba Coding Plan",
         "mimo-token-plan": "Xiaomi MiMo Token Plan",
     ]
 

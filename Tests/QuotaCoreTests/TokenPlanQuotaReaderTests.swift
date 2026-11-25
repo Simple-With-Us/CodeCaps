@@ -55,6 +55,7 @@ final class TokenPlanQuotaReaderTests: XCTestCase {
     func testTokenPlanLabelsAndFleetFallbackDoNotCreateAlwaysVisibleProviders() {
         let labels = [
             "alibaba-token-plan": "Alibaba Token Plan",
+            "alibaba-coding-plan": "Alibaba Coding Plan",
             "mimo-token-plan": "Xiaomi MiMo Token Plan",
         ]
         let windows = labels.keys.sorted().map { key in
@@ -69,12 +70,41 @@ final class TokenPlanQuotaReaderTests: XCTestCase {
         XCTAssertEqual(Set(fallback.fallback.map(\.canonicalProviderKey)), Set(labels.keys))
         let withLocalRead = QuotaLocalScope.fleetFallback(
             fleet: windows, adopted: [], localProviders: ["mimo-token-plan"])
-        XCTAssertEqual(withLocalRead.fallback.map(\.canonicalProviderKey), ["alibaba-token-plan"])
+        XCTAssertEqual(Set(withLocalRead.fallback.map(\.canonicalProviderKey)), ["alibaba-token-plan", "alibaba-coding-plan"])
+    }
+
+    func testAlibabaCodingPlanUsesDistinctReportedRequestWindows() {
+        let data = Data(#"{"instanceType":"pro","per5Hour":{"usedQuota":25,"totalQuota":100,"percentage":0.25,"resetTime":1800018000000},"perWeek":{},"perBillMonth":{"usedQuota":1010,"totalQuota":1000,"percentage":1.01}}"#.utf8)
+        let windows = TokenPlanQuotaParser.alibabaCoding(data, now: now)
+        XCTAssertEqual(windows.map(\.canonicalProviderKey), ["alibaba-coding-plan", "alibaba-coding-plan"])
+        XCTAssertEqual(windows.map(\.label), ["5 hours", "Monthly"])
+        XCTAssertEqual(windows.first?.remainingPercent, 75)
+        XCTAssertEqual(windows.first?.absoluteRemaining, 75)
+        XCTAssertEqual(windows.first?.absoluteLimit, 100)
+        XCTAssertEqual(windows.first?.quotaUnit, "requests")
+        XCTAssertNotNil(windows.first?.resetAt)
+        XCTAssertEqual(windows.last?.status, .exhausted)
+        XCTAssertNil(windows.last?.resetAt)
+        XCTAssertTrue(TokenPlanQuotaParser.alibaba(data, now: now).isEmpty)
+    }
+
+    func testAlibabaCodingPlanRejectsMissingMalformedOrExpiredWindows() {
+        for raw in [
+            #"{}"#,
+            #"{"per5HourPercentage":0.5}"#,
+            #"{"per5Hour":{"usedQuota":true,"totalQuota":100}}"#,
+            #"{"perWeek":{"usedQuota":1,"totalQuota":0}}"#,
+            #"{"perWeek":{"usedQuota":1,"totalQuota":100,"resetTime":1790000000000}}"#,
+            #"{"perBillMonth":{"usedQuota":9,"totalQuota":100,"resetTime":"invalid"}}"#,
+        ] {
+            XCTAssertTrue(TokenPlanQuotaParser.alibabaCoding(Data(raw.utf8), now: now).isEmpty)
+        }
     }
 
     func testNewReadersAreOptInWithoutChangingExistingDefaults() {
         let prefs = QuotaReaderPreferences()
         XCTAssertFalse(prefs.isEnabled("alibaba-token-plan"))
+        XCTAssertFalse(prefs.isEnabled("alibaba-coding-plan"))
         XCTAssertFalse(prefs.isEnabled("mimo-token-plan"))
         XCTAssertTrue(prefs.isEnabled("zcode"))
         XCTAssertTrue(QuotaReaderPreferences(enabledByReaderID: ["mimo-token-plan": true]).isEnabled("mimo-token-plan"))
