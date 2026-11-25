@@ -1094,7 +1094,8 @@ public struct CompanionUsageBar: View {
 
     private var trackColor: Color {
         #if os(iOS)
-        return Color(uiColor: .tertiarySystemFill)
+        // The Mac's track token: a faint black on light, a faint white on dark.
+        return colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.08)
         #else
         return Color.secondary.opacity(0.15)
         #endif
@@ -1105,13 +1106,30 @@ public struct CompanionUsageBar: View {
     }
 
     private var pacingMarkerHaloColor: Color {
-        colorScheme == .dark ? Color.black.opacity(0.7) : Color.white.opacity(0.75)
+        colorScheme == .dark ? Color.black.opacity(0.7) : Color.white.opacity(0.7)
     }
 
     public init(remainingPercent: Double?, elapsedFraction: Double? = nil, height: CGFloat = 7) {
         self.remainingPercent = remainingPercent
         self.elapsedFraction = elapsedFraction
         self.height = height
+    }
+
+    /// Where the marker and its halo sit, as the Mac bar lays them out: the
+    /// marker at the elapsed fraction, kept clear of the rounded ends, and the
+    /// halo trimmed to the bar.  Narrower than the marker, it sits in the middle.
+    private func markerLayout(fraction: CGFloat, totalWidth: CGFloat, markerWidth: CGFloat, haloPadding: CGFloat)
+        -> (center: CGFloat, haloStart: CGFloat, haloEnd: CGFloat) {
+        guard totalWidth > markerWidth else { return (totalWidth / 2, 0, totalWidth) }
+        let half = markerWidth / 2
+        let cap = height / 2
+        var center = min(max(fraction * totalWidth, half), totalWidth - half)
+        if totalWidth >= (half + cap) * 2 {
+            if center - half < cap { center = half }
+            else if totalWidth - (center + half) < cap { center = totalWidth - half }
+        }
+        let reach = half + haloPadding
+        return (center, max(0, center - reach), min(totalWidth, center + reach))
     }
 
     public var body: some View {
@@ -1147,15 +1165,19 @@ public struct CompanionUsageBar: View {
 
                 // Pacing marker line (elapsed time fraction)
                 if safeRemaining != nil, let frac = elapsedFraction, frac.isFinite, frac >= 0, frac <= 1.0, totalWidth > 0 {
-                    let markerX = CGFloat(frac) * totalWidth
-                    let markerHeight: CGFloat = 18
+                    // Same placement as the Mac bar: a 1 pt halo, a position that
+                    // stays off the rounded ends, and a halo trimmed to the bar.
                     let markerWidth: CGFloat = 3.0
+                    let haloPadding: CGFloat = 1.0
+                    let markerHeight: CGFloat = 18
+                    let layout = markerLayout(fraction: CGFloat(frac), totalWidth: totalWidth, markerWidth: markerWidth, haloPadding: haloPadding)
+                    let markerX = layout.center
 
                     // Halo
                     Rectangle()
                         .fill(pacingMarkerHaloColor)
-                        .frame(width: 5.5, height: markerHeight + 2)
-                        .position(x: markerX, y: geo.size.height / 2)
+                        .frame(width: layout.haloEnd - layout.haloStart, height: markerHeight + haloPadding * 2)
+                        .position(x: (layout.haloStart + layout.haloEnd) / 2, y: geo.size.height / 2)
 
                     // Line
                     Rectangle()
