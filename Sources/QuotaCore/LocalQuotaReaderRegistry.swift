@@ -120,7 +120,10 @@ public struct LocalQuotaReaderRegistry: Sendable {
                 ZCodeQuotaReader(credential: zCodeCredentialProvider)
             },
             LocalQuotaReaderRegistration(id: "alibaba-token-plan", label: "Alibaba Token Plan", isOptional: true) {
-                AlibabaTokenPlanReader()
+                BailianPlanQuotaReader(plan: .tokenPlan)
+            },
+            LocalQuotaReaderRegistration(id: "alibaba-coding-plan", label: "Alibaba Coding Plan", isOptional: true) {
+                BailianPlanQuotaReader(plan: .codingPlan)
             },
             LocalQuotaReaderRegistration(id: "mimo-token-plan", label: "Xiaomi MiMo Token Plan", isOptional: true) {
                 MiMoTokenPlanReader(credential: mimoCredentialProvider)

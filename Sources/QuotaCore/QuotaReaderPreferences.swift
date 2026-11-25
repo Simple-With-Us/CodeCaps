@@ -12,7 +12,7 @@ public struct QuotaReaderPreferences: Codable, Equatable, Sendable {
     }
 
     public func isEnabled(_ readerID: String) -> Bool {
-        enabledByReaderID[readerID] ?? !["alibaba-token-plan", "mimo-token-plan"].contains(readerID)
+        enabledByReaderID[readerID] ?? !["alibaba-token-plan", "alibaba-coding-plan", "mimo-token-plan"].contains(readerID)
     }
 
     public mutating func setEnabled(_ enabled: Bool, for readerID: String) {

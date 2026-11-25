@@ -61,9 +61,30 @@ struct MiMoTokenPlanReader: LocalQuotaReading {
     }
 }
 
-struct AlibabaTokenPlanReader: LocalQuotaReading {
+enum BailianQuotaPlan: Sendable {
+    case tokenPlan, codingPlan
+
+    var command: String {
+        switch self {
+        case .tokenPlan: "token-plan"
+        case .codingPlan: "coding-plan"
+        }
+    }
+
+    var id: String { "alibaba-" + command }
+    var title: String {
+        switch self {
+        case .tokenPlan: "Alibaba Token Plan"
+        case .codingPlan: "Alibaba Coding Plan"
+        }
+    }
+}
+
+struct BailianPlanQuotaReader: LocalQuotaReading {
+    let plan: BailianQuotaPlan
+
     func read() async -> LocalQuotaResult {
-        let id = "alibaba-token-plan"
+        let id = plan.id
         let home = FileManager.default.homeDirectoryForCurrentUser
         let paths = [home.appendingPathComponent(".local/bin/bl").path, "/opt/homebrew/bin/bl", "/usr/local/bin/bl"]
         guard let path = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
@@ -71,12 +92,16 @@ struct AlibabaTokenPlanReader: LocalQuotaReading {
         }
         do {
             let data = try await BoundedQuotaProcess().run(
-                path: path, arguments: ["usage", "token-plan", "--output", "json"],
+                path: path, arguments: ["usage", plan.command, "--output", "json"],
                 home: home, timeout: 15, maxBytes: 32_768)
-            let windows = TokenPlanQuotaParser.alibaba(data, now: Date())
+            let now = Date()
+            let windows = switch plan {
+            case .tokenPlan: TokenPlanQuotaParser.alibaba(data, now: now)
+            case .codingPlan: TokenPlanQuotaParser.alibabaCoding(data, now: now)
+            }
             if !windows.isEmpty { return LocalQuotaResult(windows: windows) }
         } catch {}
-        return LocalQuotaResult(issues: [id: "Bailian did not report a current Token Plan quota. Check its console login."])
+        return LocalQuotaResult(issues: [id: "Bailian did not report a current \(plan.title) quota. Check its console login and subscription."])
     }
 }
 
@@ -147,6 +172,44 @@ enum TokenPlanQuotaParser {
                 label: label, remainingPercent: remaining, isExhausted: remaining == 0,
                 resetAt: reset, window: label.lowercased(), status: .derived(remainingPercent: remaining),
                 occurredAt: iso(now), source: "bailian-cli")
+        }
+    }
+
+    /// Bailian Coding Plan emits nested windows with request counts, unlike the
+    /// Token Plan's flat fractional percentages. Missing windows do not become quota.
+    static func alibabaCoding(_ data: Data, now: Date) -> [QuotaWindow] {
+        guard let payload = try? JSONDecoder().decode([String: CodingPlanWindow].self, from: data) else { return [] }
+        let plan = BailianQuotaPlan.codingPlan
+        let kinds = [("per5Hour", "5 hours", "5h"), ("perWeek", "Weekly", "weekly"),
+                     ("perBillMonth", "Monthly", "monthly")]
+        return kinds.compactMap { key, label, period in
+            guard let quota = payload[key]?.values,
+                  let used = quota["usedQuota"]?.number, used.isFinite, used >= 0,
+                  let total = quota["totalQuota"]?.number, total.isFinite, total > 0 else { return nil }
+            let reset: String?
+            if let raw = quota["resetTime"] {
+                guard let ms = raw.number, ms.isFinite, ms > 0, ms < 10_000_000_000_000 else { return nil }
+                let date = Date(timeIntervalSince1970: ms / 1_000)
+                guard date > now else { return nil }
+                reset = iso(date)
+            } else {
+                reset = nil
+            }
+            let balance = max(0, total - used)
+            let remaining = 100 * (balance / total)
+            return QuotaWindow(
+                id: plan.id + ":" + key, provider: plan.id, providerKey: plan.id, providerLabel: plan.title,
+                label: label, remainingPercent: remaining, absoluteRemaining: balance, absoluteLimit: total,
+                quotaUnit: "requests", isExhausted: remaining == 0, resetAt: reset, window: period,
+                status: .derived(remainingPercent: remaining), occurredAt: iso(now), source: "bailian-cli")
+        }
+    }
+
+    private struct CodingPlanWindow: Decodable {
+        let values: [String: JSONValue]?
+
+        init(from decoder: Decoder) throws {
+            values = try? decoder.singleValueContainer().decode([String: JSONValue].self)
         }
     }
 
