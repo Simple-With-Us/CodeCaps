@@ -508,7 +508,7 @@ public enum QuotaLocalScope {
         fleet: [QuotaWindow],
         adopted: [QuotaWindow],
         localProviders: Set<String>,
-        expectedKeys: [String] = expectedQuotaProviderKeys + QuotaProviders.optionalTokenPlanLabels.keys.sorted()
+        expectedKeys: [String] = fleetFallbackQuotaProviderKeys
     ) -> (fallback: [QuotaWindow], superseded: [QuotaWindow]) {
         var fallback: [QuotaWindow] = []
         var superseded: [QuotaWindow] = []
@@ -1192,6 +1192,11 @@ enum QuotaProviders {
 /// optional additive provider identity fields used by the native client.
 public let expectedQuotaProviderKeys: [String] = QuotaProviders.expected.map(\.key)
 public let EXPECTED_QUOTA_PROVIDERS: [String] = expectedQuotaProviderKeys
+
+/// Providers that may show an actual fleet reading without requiring a
+/// permanent placeholder on devices that have not configured the reader.
+public let fleetFallbackQuotaProviderKeys: [String] =
+    expectedQuotaProviderKeys + QuotaProviders.optionalTokenPlanLabels.keys.sorted()
 
 public func quotaProviderKey(_ provider: String, providerKey: String? = nil, via: String? = nil) -> String {
     QuotaProviders.canonicalKey(provider: provider, providerKey: providerKey, via: via)

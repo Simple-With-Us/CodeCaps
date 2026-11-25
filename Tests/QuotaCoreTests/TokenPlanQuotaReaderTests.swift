@@ -59,7 +59,7 @@ final class TokenPlanQuotaReaderTests: XCTestCase {
         ]
         let windows = labels.keys.sorted().map { key in
             QuotaWindow(id: key + ":sample", provider: key, providerKey: key,
-                        label: "Quota", remainingPercent: 75)
+                        label: "Quota", remainingPercent: 75, occurredAt: "2026-11-25T00:00:00Z")
         }
         for (key, label) in labels {
             XCTAssertEqual(quotaProviderLabel(key), label)
