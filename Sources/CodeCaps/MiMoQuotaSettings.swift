@@ -64,7 +64,7 @@ struct MiMoQuotaSettings: View {
         let credential = MiMoTokenPlanCredential(key: draft, region: region)
         guard credential.isValid else { return }
         busy = true
-        Task {
+        Task { @MainActor in
             defer { busy = false }
             do {
                 try await MiMoQuotaCredentialStore.shared.save(credential)
@@ -77,7 +77,7 @@ struct MiMoQuotaSettings: View {
 
     private func clear() {
         busy = true
-        Task {
+        Task { @MainActor in
             defer { busy = false }
             do {
                 try await MiMoQuotaCredentialStore.shared.clear()

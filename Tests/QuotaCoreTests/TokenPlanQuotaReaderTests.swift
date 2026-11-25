@@ -52,6 +52,26 @@ final class TokenPlanQuotaReaderTests: XCTestCase {
         XCTAssertTrue(MiMoTokenPlanRegion.allCases.allSatisfy { $0.quotaURL.path == "/v1/platform/token_plan" })
     }
 
+    func testTokenPlanLabelsAndFleetFallbackDoNotCreateAlwaysVisibleProviders() {
+        let labels = [
+            "alibaba-token-plan": "Alibaba Token Plan",
+            "mimo-token-plan": "Xiaomi MiMo Token Plan",
+        ]
+        let windows = labels.keys.sorted().map { key in
+            QuotaWindow(id: key + ":sample", provider: key, providerKey: key,
+                        label: "Quota", remainingPercent: 75)
+        }
+        for (key, label) in labels {
+            XCTAssertEqual(quotaProviderLabel(key), label)
+            XCTAssertFalse(expectedQuotaProviderKeys.contains(key))
+        }
+        let fallback = QuotaLocalScope.fleetFallback(fleet: windows, adopted: [], localProviders: [])
+        XCTAssertEqual(Set(fallback.fallback.map(\.canonicalProviderKey)), Set(labels.keys))
+        let withLocalRead = QuotaLocalScope.fleetFallback(
+            fleet: windows, adopted: [], localProviders: ["mimo-token-plan"])
+        XCTAssertEqual(withLocalRead.fallback.map(\.canonicalProviderKey), ["alibaba-token-plan"])
+    }
+
     func testNewReadersAreOptInWithoutChangingExistingDefaults() {
         let prefs = QuotaReaderPreferences()
         XCTAssertFalse(prefs.isEnabled("alibaba-token-plan"))
