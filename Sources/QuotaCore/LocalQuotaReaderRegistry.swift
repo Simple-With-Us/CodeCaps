@@ -12,6 +12,7 @@ extension GrokBotQuotaReader: LocalQuotaReading {}
 extension GbuQuotaReader: LocalQuotaReading {}
 extension KimiQuotaReader: LocalQuotaReading {}
 extension ZCodeQuotaReader: LocalQuotaReading {}
+extension OpenCodeGoQuotaReader: LocalQuotaReading {}
 
 /// A registered reader and the non-secret configuration metadata used to
 /// describe it in the app.  The factory keeps credential reads inside the
