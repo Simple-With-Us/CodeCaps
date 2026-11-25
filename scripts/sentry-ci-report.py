@@ -90,10 +90,20 @@ APP = "codecaps"
 
 CRON_SCHEDULES = {
     "iOS TestFlight ship (GitHub-hosted macOS)": "26,56 * * * *",
-    # auto-merge-prs.yml: fleet auto-merge sweep (15 min).
-    "Auto-merge PRs": "*/15 * * * *",
 }
 _CRON_SCHEDULES_FOLDED = {name.casefold(): expr for name, expr in CRON_SCHEDULES.items()}
+
+# Scheduled workflows that deliberately send NO Crons check-in (AFC-626).
+# `auto-merge-prs.yml` asks for a 15-minute schedule, but GitHub starts it
+# about once an hour, so a `*/15` monitor recorded three misses for every real
+# run and stayed red while the sweep worked.  A missed sweep tick is harmless
+# (the next one picks the PR up), and a FAILED run still raises the error event
+# in section 2 of main(), so the cron monitor added nothing but noise.  A
+# schedule run of a name listed here skips both check-in phases (see
+# resolve_cron_expr()) without the unmapped-schedule drift event that an
+# unlisted name would raise.
+UNMONITORED_SCHEDULES = frozenset({"Auto-merge PRs"})
+_UNMONITORED_FOLDED = {name.casefold() for name in UNMONITORED_SCHEDULES}
 
 DEFAULT_CHECKIN_MARGIN = 15
 # GitHub `schedule` delivery is best-effort.  These daily/weekday/hourly
@@ -105,20 +115,23 @@ DEFAULT_CHECKIN_MARGIN = 15
 # `ci-CI-refs/heads/main` group can also queue or drop that tick.  Do not
 # copy this onto 30-min macos ship crons (FLEET-INFRA-CC / DA / CX): those
 # drop ticks entirely, so a wider margin still misses.
-CHECKIN_MARGIN_OVERRIDES = {
-    # Auto-merge PRs is a 15-minute cron; the reporter check-in arrives
-    # only after the run completes plus workflow_run dispatch.  30 minutes
-    # covers ordinary GitHub lag and a short sweep without hiding a
-    # dropped tick the next window would also miss.
-    "Auto-merge PRs": 30,
-}
+CHECKIN_MARGIN_OVERRIDES = {}
 _CHECKIN_MARGINS_FOLDED = {name.casefold(): margin for name, margin in CHECKIN_MARGIN_OVERRIDES.items()}
 
 DEFAULT_MAX_RUNTIME = 60
 MAX_RUNTIME_OVERRIDES = {}
 _MAX_RUNTIMES_FOLDED = {name.casefold(): runtime for name, runtime in MAX_RUNTIME_OVERRIDES.items()}
 
-FLAP_DEBOUNCE_OVERRIDES = {}
+# AFC-626: the 30-minute macOS ship cron is the dropped-tick class named above
+# (FLEET-INFRA-CC / DA / CX), so one miss is routine and a wider margin alone
+# still misses a dropped tick.  Three failed or missed check-ins in a row is a
+# real stop; one ok check-in closes the issue again.
+FLAP_DEBOUNCE_OVERRIDES = {
+    "iOS TestFlight ship (GitHub-hosted macOS)": {
+        "failure_issue_threshold": 3,
+        "recovery_threshold": 1,
+    },
+}
 _FLAP_DEBOUNCE_FOLDED = {name.casefold(): cfg for name, cfg in FLAP_DEBOUNCE_OVERRIDES.items()}
 
 WORKFLOWS_DIR = Path(__file__).resolve().parent.parent / ".github" / "workflows"
@@ -241,14 +254,22 @@ def resolve_cron_expr(
 ) -> str | None:
     """Look up the mirrored cron expression for a scheduled workflow, or None.
 
-    On a miss this both warns in the job log and raises the `unmapped-schedule`
-    config-drift issue in Sentry, then returns None so the caller skips the
-    check-in.  Shared by the requested and completed phases: duplicating it
-    would let one phase send a check-in the other silently dropped.
+    A name in UNMONITORED_SCHEDULES returns None quietly, so the caller skips
+    the check-in.  On any other miss this both warns in the job log and raises
+    the `unmapped-schedule` config-drift issue in Sentry, then returns None so
+    the caller skips the check-in.  Shared by the requested and completed
+    phases: duplicating it would let one phase send a check-in the other
+    silently dropped.
 
     Lookup is case-folded — a workflow rename that only changes capitalisation
     must never again silently detach a job from its Crons monitor.
     """
+    if workflow_name.casefold() in _UNMONITORED_FOLDED:
+        print(
+            f"Workflow '{workflow_name}' is listed in UNMONITORED_SCHEDULES; "
+            "no cron check-in sent."
+        )
+        return None
     cron_expr = _CRON_SCHEDULES_FOLDED.get(workflow_name.casefold())
     if cron_expr:
         return cron_expr
