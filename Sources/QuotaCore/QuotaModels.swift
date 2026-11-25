@@ -508,7 +508,7 @@ public enum QuotaLocalScope {
         fleet: [QuotaWindow],
         adopted: [QuotaWindow],
         localProviders: Set<String>,
-        expectedKeys: [String] = expectedQuotaProviderKeys
+        expectedKeys: [String] = fleetFallbackQuotaProviderKeys
     ) -> (fallback: [QuotaWindow], superseded: [QuotaWindow]) {
         var fallback: [QuotaWindow] = []
         var superseded: [QuotaWindow] = []
@@ -1136,6 +1136,13 @@ enum QuotaProviders {
         Expected(key: "zcode", label: "ZCode", via: nil),
     ]
 
+    // Recognize these windows without creating permanent "no report" rows for
+    // users who have not opted into their local readers.
+    static let optionalTokenPlanLabels: [String: String] = [
+        "alibaba-token-plan": "Alibaba Token Plan",
+        "mimo-token-plan": "Xiaomi MiMo Token Plan",
+    ]
+
     static func canonicalKey(provider: String, providerKey: String?, via: String?) -> String {
         if let viaLower = via?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
             if viaLower == "antigravity" {
@@ -1177,7 +1184,7 @@ enum QuotaProviders {
     }
 
     static func label(for key: String) -> String {
-        expected.first(where: { $0.key == key })?.label ?? key
+        expected.first(where: { $0.key == key })?.label ?? optionalTokenPlanLabels[key] ?? key
     }
 }
 
@@ -1185,6 +1192,11 @@ enum QuotaProviders {
 /// optional additive provider identity fields used by the native client.
 public let expectedQuotaProviderKeys: [String] = QuotaProviders.expected.map(\.key)
 public let EXPECTED_QUOTA_PROVIDERS: [String] = expectedQuotaProviderKeys
+
+/// Providers that may show an actual fleet reading without requiring a
+/// permanent placeholder on devices that have not configured the reader.
+public let fleetFallbackQuotaProviderKeys: [String] =
+    expectedQuotaProviderKeys + QuotaProviders.optionalTokenPlanLabels.keys.sorted()
 
 public func quotaProviderKey(_ provider: String, providerKey: String? = nil, via: String? = nil) -> String {
     QuotaProviders.canonicalKey(provider: provider, providerKey: providerKey, via: via)

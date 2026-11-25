@@ -483,6 +483,7 @@ struct SettingsSourcesFleetPage: View {
             ForEach(ReaderStatus.all, id: \.providerKey) { reader in
                 readerRow(reader)
                 if reader.optionalReaderID == "zcode" { ZAIQuotaSettingsView(controller: model.zAIQuotaSetup) }
+                if reader.optionalReaderID == "mimo-token-plan" { MiMoQuotaSettings(model: model) }
             }
         } header: {
             Eyebrow("THIS MAC")
@@ -1019,6 +1020,8 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "minimax", label: "MiniMax", source: "MiniMax CLI credentials"),
         ReaderStatus(providerKey: "kimi", label: "Kimi", source: "Kimi Code credentials", optionalReaderID: "kimi"),
         ReaderStatus(providerKey: "zcode", label: "Z.ai / ZCode", source: "ZCode credentials", optionalReaderID: "zcode"),
+        ReaderStatus(providerKey: "alibaba-token-plan", label: "Alibaba Token Plan", source: "Bailian CLI console sign-in", optionalReaderID: "alibaba-token-plan"),
+        ReaderStatus(providerKey: "mimo-token-plan", label: "Xiaomi MiMo Token Plan", source: "MiMo Token Plan key", optionalReaderID: "mimo-token-plan"),
     ]
 }
 
@@ -1987,14 +1990,14 @@ struct SettingsInfisicalPage: View {
         let client = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
         let retained = authentication == .serviceToken ? existing?.serviceToken
             : (existing?.clientId == client ? existing?.clientSecret : nil)
-        let secret = credential.isEmpty ? (retained ?? "") : credential.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedCredential = credential.isEmpty ? (retained ?? "") : credential.trimmingCharacters(in: .whitespacesAndNewlines)
         var binding = InfisicalBinding(id: editingID ?? UUID().uuidString,
             label: label.trimmingCharacters(in: .whitespacesAndNewlines), siteURL: url,
             projectId: projectId.trimmingCharacters(in: .whitespacesAndNewlines),
             environment: environment.trimmingCharacters(in: .whitespacesAndNewlines),
             secretPath: folder.trimmingCharacters(in: .whitespacesAndNewlines), authentication: authentication, access: access)
-        if authentication == .serviceToken { binding.serviceToken = secret }
-        else { binding.clientId = client; binding.clientSecret = secret }
+        if authentication == .serviceToken { binding.serviceToken = selectedCredential }
+        else { binding.clientId = client; binding.clientSecret = selectedCredential }
         var candidate = latest
         candidate.bindings.removeAll { $0.id == binding.id }
         candidate.bindings.append(binding)

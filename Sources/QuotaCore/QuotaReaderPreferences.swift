@@ -1,8 +1,8 @@
 import Foundation
 
 /// Per-device choices for optional local quota readers.  Missing entries stay
-/// enabled so existing installations and readers added by a later app version
-/// keep the current automatic-read behavior until the owner changes it.
+/// enabled for established readers. New Token Plan readers require explicit
+/// opt-in because they invoke a signed-in CLI or use a stored provider key.
 public struct QuotaReaderPreferences: Codable, Equatable, Sendable {
     public static let defaultsKey = "optionalQuotaReaders"
     public var enabledByReaderID: [String: Bool]
@@ -12,7 +12,7 @@ public struct QuotaReaderPreferences: Codable, Equatable, Sendable {
     }
 
     public func isEnabled(_ readerID: String) -> Bool {
-        enabledByReaderID[readerID] ?? true
+        enabledByReaderID[readerID] ?? !["alibaba-token-plan", "mimo-token-plan"].contains(readerID)
     }
 
     public mutating func setEnabled(_ enabled: Bool, for readerID: String) {
