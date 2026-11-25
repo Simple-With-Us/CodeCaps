@@ -1368,6 +1368,15 @@ final class MonitorModel: ObservableObject {
         if providerChecksEnabled || serverEnabled { refreshProviderChecks() }
     }
 
+    func tokenPlanCredentialChanged(enabled: Bool) {
+        let readerID = "mimo-token-plan"
+        if isOptionalQuotaReaderEnabled(readerID) {
+            // Flush the prior account's reading before showing a replacement.
+            setOptionalQuotaReaderEnabled(false, readerID: readerID)
+        }
+        if enabled { setOptionalQuotaReaderEnabled(true, readerID: readerID) }
+    }
+
     private func zAIQuotaSetupChanged() {
         invalidateRefresh()
         if let providerResult {
@@ -3842,6 +3851,8 @@ final class MonitorModel: ObservableObject {
     ) async -> LocalQuotaResult {
         let registry = LocalQuotaReaderRegistry.configured(zCodeCredentialProvider: {
             await ZAIQuotaCredentialStore.shared.load()
+        }, mimoCredentialProvider: {
+            await MiMoQuotaCredentialStore.shared.load()
         })
         async let registered = registry.read(preferences: preferences)
         async let antigravity = AntigravitySummaryReader().read()

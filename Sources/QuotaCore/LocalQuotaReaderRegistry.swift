@@ -89,6 +89,13 @@ public struct LocalQuotaReaderRegistry: Sendable {
     public static func configured(
         zCodeCredentialProvider: @escaping @Sendable () async -> ZCodeQuotaCredential?
     ) -> LocalQuotaReaderRegistry {
+        configured(zCodeCredentialProvider: zCodeCredentialProvider, mimoCredentialProvider: { nil })
+    }
+
+    public static func configured(
+        zCodeCredentialProvider: @escaping @Sendable () async -> ZCodeQuotaCredential?,
+        mimoCredentialProvider: @escaping @Sendable () async -> MiMoTokenPlanCredential?
+    ) -> LocalQuotaReaderRegistry {
         LocalQuotaReaderRegistry(registrations: [
             LocalQuotaReaderRegistration(id: "local-primary", label: "Built-In Provider Sessions",
                                          configurationMetadata: ["providers": "anthropic,openai,grok,minimax,google-antigravity"]) {
@@ -111,6 +118,12 @@ public struct LocalQuotaReaderRegistry: Sendable {
             },
             LocalQuotaReaderRegistration(id: "zcode", label: "Z.ai / ZCode", configurationMetadata: ["providerKey": "zcode"], isOptional: true) {
                 ZCodeQuotaReader(credential: zCodeCredentialProvider)
+            },
+            LocalQuotaReaderRegistration(id: "alibaba-token-plan", label: "Alibaba Token Plan", isOptional: true) {
+                AlibabaTokenPlanReader()
+            },
+            LocalQuotaReaderRegistration(id: "mimo-token-plan", label: "Xiaomi MiMo Token Plan", isOptional: true) {
+                MiMoTokenPlanReader(credential: mimoCredentialProvider)
             },
         ])
     }
