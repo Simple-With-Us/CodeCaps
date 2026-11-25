@@ -73,8 +73,12 @@ class UnmonitoredScheduleTests(unittest.TestCase):
         unmonitored_folded = {name.casefold() for name in reporter.UNMONITORED_SCHEDULES}
         self.assertEqual(unmonitored_folded - {name.casefold() for name in found}, set())
         self.assertEqual(
-            reporter.CRON_SCHEDULES,
-            {name: cron for name, cron in found.items() if name.casefold() not in unmonitored_folded},
+            {name.casefold(): cron for name, cron in reporter.CRON_SCHEDULES.items()},
+            {
+                name.casefold(): cron
+                for name, cron in found.items()
+                if name.casefold() not in unmonitored_folded
+            },
         )
 
     def test_requested_sweep_opens_no_checkin_and_raises_no_drift(self):
@@ -110,6 +114,11 @@ class ConfigDriftTests(unittest.TestCase):
         live = {name.casefold() for name in reporter.CRON_SCHEDULES}
         live |= {name.casefold() for name in reporter.UNMONITORED_SCHEDULES}
         self.assertEqual(reporter.find_cron_schedule_drift(live), [])
+
+    def test_name_in_both_maps_is_reported_as_drift(self):
+        live = set(reporter.CRON_SCHEDULES) | set(reporter.UNMONITORED_SCHEDULES)
+        with mock.patch.dict(reporter.CRON_SCHEDULES, {"Auto-merge PRs": "*/15 * * * *"}):
+            self.assertEqual(reporter.find_cron_schedule_drift(live), ["Auto-merge PRs"])
 
     def test_stale_unmonitored_entry_raises_the_stale_cron_key_event(self):
         rc, sent = run_reporter(
