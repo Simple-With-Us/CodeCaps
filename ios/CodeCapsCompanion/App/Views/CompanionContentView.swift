@@ -1115,17 +1115,21 @@ public struct CompanionUsageBar: View {
         self.height = height
     }
 
-    /// Where the marker's center sits: at the elapsed fraction, kept clear of
-    /// the bar's rounded ends, as the Mac bar does.
-    private func markerCenter(fraction: CGFloat, totalWidth: CGFloat, markerWidth: CGFloat) -> CGFloat {
+    /// Where the marker and its halo sit, as the Mac bar lays them out: the
+    /// marker at the elapsed fraction, kept clear of the rounded ends, and the
+    /// halo trimmed to the bar.  Narrower than the marker, it sits in the middle.
+    private func markerLayout(fraction: CGFloat, totalWidth: CGFloat, markerWidth: CGFloat, haloPadding: CGFloat)
+        -> (center: CGFloat, haloStart: CGFloat, haloEnd: CGFloat) {
+        guard totalWidth > markerWidth else { return (totalWidth / 2, 0, totalWidth) }
         let half = markerWidth / 2
         let cap = height / 2
-        var center = min(max(fraction * totalWidth, half), max(half, totalWidth - half))
+        var center = min(max(fraction * totalWidth, half), totalWidth - half)
         if totalWidth >= (half + cap) * 2 {
             if center - half < cap { center = half }
             else if totalWidth - (center + half) < cap { center = totalWidth - half }
         }
-        return center
+        let reach = half + haloPadding
+        return (center, max(0, center - reach), min(totalWidth, center + reach))
     }
 
     public var body: some View {
@@ -1161,19 +1165,19 @@ public struct CompanionUsageBar: View {
 
                 // Pacing marker line (elapsed time fraction)
                 if safeRemaining != nil, let frac = elapsedFraction, frac.isFinite, frac >= 0, frac <= 1.0, totalWidth > 0 {
-                    // Same geometry as the Mac bar: a 3 pt marker that stands 2 pt
-                    // proud of the bar above and below, a 1 pt halo, and a position
-                    // that stays off the rounded ends.
+                    // Same placement as the Mac bar: a 1 pt halo, a position that
+                    // stays off the rounded ends, and a halo trimmed to the bar.
                     let markerWidth: CGFloat = 3.0
                     let haloPadding: CGFloat = 1.0
-                    let markerHeight = height + 4
-                    let markerX = markerCenter(fraction: CGFloat(frac), totalWidth: totalWidth, markerWidth: markerWidth)
+                    let markerHeight: CGFloat = 18
+                    let layout = markerLayout(fraction: CGFloat(frac), totalWidth: totalWidth, markerWidth: markerWidth, haloPadding: haloPadding)
+                    let markerX = layout.center
 
                     // Halo
                     Rectangle()
                         .fill(pacingMarkerHaloColor)
-                        .frame(width: markerWidth + haloPadding * 2, height: markerHeight + haloPadding * 2)
-                        .position(x: markerX, y: geo.size.height / 2)
+                        .frame(width: layout.haloEnd - layout.haloStart, height: markerHeight + haloPadding * 2)
+                        .position(x: (layout.haloStart + layout.haloEnd) / 2, y: geo.size.height / 2)
 
                     // Line
                     Rectangle()
