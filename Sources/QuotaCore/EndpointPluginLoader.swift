@@ -19,6 +19,9 @@ public enum EndpointPluginLoader {
 
     private final class Cache: @unchecked Sendable {
         let lock = NSLock()
+        /// Serializes the off-lock scan itself, so one TTL expiry produces
+        /// one disk scan however many callers arrive together.
+        let scanLock = NSLock()
         var descriptors: [EndpointPluginDescriptor] = []
         var loadedAt: Date = .distantPast
     }
@@ -44,6 +47,18 @@ public enum EndpointPluginLoader {
             return fresh
         }
         let stale = cache.descriptors
+        cache.lock.unlock()
+        // Single-flight the scan: every caller that arrived during the
+        // same expiry waits here, then re-checks the cache before doing
+        // any disk work of its own.
+        cache.scanLock.lock()
+        defer { cache.scanLock.unlock() }
+        cache.lock.lock()
+        if Date().timeIntervalSince(cache.loadedAt) <= ttl {
+            let fresh = cache.descriptors
+            cache.lock.unlock()
+            return fresh
+        }
         cache.lock.unlock()
         // A scan that cannot even list the folder is transient: serve the
         // last good rows and retry on the next access rather than caching
