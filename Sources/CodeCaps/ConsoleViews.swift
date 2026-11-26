@@ -337,7 +337,7 @@ struct ConsoleView: View {
                     .accessibilityHidden(true)
             }
             if let unavailable = state.unavailableAlert {
-                Text("Alert source unavailable: \(unavailable.providerKey)\(unavailable.windowId.map { " · \($0)" } ?? "") + "\(sentenceGap)Check Sources & Fleet for this provider.")
+                Text("Alert source unavailable: \(unavailable.providerKey)\(unavailable.windowId.map { " · \($0)" } ?? "").\(sentenceGap)Check Sources & Fleet for this provider.")
                     .font(.callout)
                     .foregroundStyle(Theme.warning)
                     .padding(.horizontal, Metrics.pagePadding)
