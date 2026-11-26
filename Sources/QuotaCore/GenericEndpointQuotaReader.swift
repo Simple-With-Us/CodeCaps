@@ -87,19 +87,27 @@ public struct GenericEndpointQuotaReader: LocalQuotaReading, Sendable {
         return descriptor.windows.compactMap { spec in
             let absoluteRemaining = EndpointJSONPath.number(root, path: spec.absoluteRemainingPath)
             let absoluteLimit = EndpointJSONPath.number(root, path: spec.absoluteLimitPath)
-            let remaining: Double?
+            let percentRemaining: Double?
             if let percent = EndpointJSONPath.number(root, path: spec.remainingPercentPath) {
-                remaining = percent
+                percentRemaining = percent
             } else if let used = EndpointJSONPath.number(root, path: spec.usedPercentPath) {
-                remaining = 100 - used
-            } else if let absoluteRemaining, let absoluteLimit, absoluteLimit > 0 {
-                remaining = absoluteRemaining / absoluteLimit * 100
+                percentRemaining = 100 - used
             } else {
-                remaining = nil
+                percentRemaining = nil
+            }
+            let absoluteFallback: Double? = if let absoluteRemaining, let absoluteLimit, absoluteLimit > 0 {
+                absoluteRemaining / absoluteLimit * 100
+            } else {
+                nil
             }
             // An out-of-range percentage is a broken endpoint answer, not
-            // a full or empty quota; drop the window as unreadable.
-            guard let remaining, remaining.isFinite, (0...100).contains(remaining) else { return nil }
+            // a full or empty quota; fall back to the absolute pair when
+            // the endpoint reported one, and drop the window only when
+            // neither source gives an in-range value.
+            let remaining = [percentRemaining, absoluteFallback]
+                .compactMap { $0 }
+                .first { $0.isFinite && (0...100).contains($0) }
+            guard let remaining else { return nil }
             let bounded = remaining
             return QuotaWindow(
                 id: descriptor.providerKey + ":" + spec.idSuffix,

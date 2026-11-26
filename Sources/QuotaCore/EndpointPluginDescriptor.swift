@@ -169,9 +169,13 @@ public struct EndpointPluginDescriptor: Codable, Equatable, Sendable {
               components.user == nil, components.password == nil,
               components.query == nil, components.fragment == nil else { return nil }
         // An IPv6 literal may still carry its brackets depending on the
-        // URL parser; compare the bare address either way.
-        let host = rawHost.hasPrefix("[") && rawHost.hasSuffix("]")
+        // URL parser; compare the bare address either way.  A trailing dot
+        // is stripped for the same reason: `localhost.` and `127.0.0.1.`
+        // resolve to the same hosts and must not fall through to the
+        // public path.
+        let unbracketed = rawHost.hasPrefix("[") && rawHost.hasSuffix("]")
             ? String(rawHost.dropFirst().dropLast()) : rawHost
+        let host = unbracketed.hasSuffix(".") ? String(unbracketed.dropLast()) : unbracketed
         let loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
         // The port relaxation belongs to loopback only; an external host
         // keeps the default-or-443 rule even when the opt-in is set.

@@ -30,9 +30,20 @@ public enum EndpointPluginLoader {
     /// access.  The refresh path keeps using `load()` directly, so a new
     /// plugin file is picked up within one refresh regardless.
     public static func loadCached(ttl: TimeInterval = 60) -> [EndpointPluginDescriptor] {
+        // No Plugins folder is the normal case: answer empty without
+        // stamping the cache, so a folder created a moment later is seen
+        // on the next access instead of after the TTL.
+        guard FileManager.default.fileExists(atPath: defaultDirectory.path) else { return [] }
         cache.lock.lock()
         defer { cache.lock.unlock() }
         if Date().timeIntervalSince(cache.loadedAt) <= ttl { return cache.descriptors }
+        // A scan that cannot even list the folder is transient: serve the
+        // last good rows and retry on the next access rather than caching
+        // the failure for the full TTL.
+        guard (try? FileManager.default.contentsOfDirectory(
+            at: defaultDirectory, includingPropertiesForKeys: nil)) != nil else {
+            return cache.descriptors
+        }
         cache.descriptors = load()
         cache.loadedAt = Date()
         return cache.descriptors

@@ -50,6 +50,11 @@ final class EndpointPluginTests: XCTestCase {
         XCTAssertNoThrow(try descriptor(endpoint: "https://8.8.8.8/usage").validated())
     }
 
+    func testTrailingDotLoopbackIsRefusedWithoutOptIn() {
+        XCTAssertThrowsError(try descriptor(endpoint: "https://localhost./usage").validated())
+        XCTAssertThrowsError(try descriptor(endpoint: "https://127.0.0.1./usage").validated())
+    }
+
     func testExternalHostKeepsDefaultPortEvenWithLoopbackOptIn() throws {
         var external = descriptor(endpoint: "https://8.8.8.8:8080/usage")
         external.allowLoopback = true
@@ -127,6 +132,23 @@ final class EndpointPluginTests: XCTestCase {
         let result = await reader.read()
         XCTAssertTrue(result.windows.isEmpty)
         XCTAssertEqual(result.issues["acme-plan"], "Acme Plan returned no readable quota.")
+    }
+
+    func testGenericReaderFallsBackToAbsolutesWhenPercentOutOfRange() async {
+        var spec = descriptor()
+        spec.windows[0].absoluteRemainingPath = "usage.monthly.left"
+        spec.windows[0].absoluteLimitPath = "usage.monthly.total"
+        let reader = GenericEndpointQuotaReader(
+            descriptor: spec, environment: [:],
+            now: { Date(timeIntervalSince1970: 0) },
+            fetch: { _ in
+                let response = HTTPURLResponse(
+                    url: URL(string: "https://api.example.com/usage")!,
+                    statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (Data(#"{"usage":{"monthly":{"percent":140,"left":30,"total":100}}}"#.utf8), response)
+            })
+        let result = await reader.read()
+        XCTAssertEqual(result.windows.first?.remainingPercent, 30)
     }
 
     func testGenericReaderMissingEnvKeyReportsSignIn() async {
