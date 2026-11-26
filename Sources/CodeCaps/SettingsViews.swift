@@ -480,7 +480,7 @@ struct SettingsSourcesFleetPage: View {
                 }
             }
             .disabled(!model.localEnabled || !model.sessionFileChecksEnabled)
-            ForEach(ReaderStatus.all, id: \.providerKey) { reader in
+            ForEach(ReaderStatus.current, id: \.providerKey) { reader in
                 readerRow(reader)
                 if reader.optionalReaderID == "zcode" { ZAIQuotaSettingsView(controller: model.zAIQuotaSetup) }
                 if reader.optionalReaderID == "mimo-token-plan" { MiMoQuotaSettings(model: model) }
@@ -690,8 +690,8 @@ struct SettingsSourcesFleetPage: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Text("#\(index + 1)")
-                .font(.system(.caption2, design: .monospaced).weight(.medium))
-                .foregroundStyle(.tertiary)
+                .font(.system(.caption, design: .monospaced).weight(.medium))
+                .foregroundStyle(.secondary)
                 .frame(width: 24, alignment: .trailing)
 
             Button {
@@ -1023,7 +1023,18 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "alibaba-token-plan", label: "Alibaba Token Plan", source: "Bailian CLI console sign-in", optionalReaderID: "alibaba-token-plan"),
         ReaderStatus(providerKey: "alibaba-coding-plan", label: "Alibaba Coding Plan (Qwen Code)", source: "Bailian CLI console sign-in", optionalReaderID: "alibaba-coding-plan"),
         ReaderStatus(providerKey: "mimo-token-plan", label: "Xiaomi MiMo Token Plan", source: "MiMo Token Plan key", optionalReaderID: "mimo-token-plan"),
+        ReaderStatus(providerKey: "opencode-go", label: "OpenCode Go", source: "OpenCode CLI sign-in", optionalReaderID: "opencode-go"),
     ]
+
+    /// Built-in rows plus one row per declarative endpoint plugin found in
+    /// the Plugins folder, so a plugin subscription can be toggled in
+    /// Settings without a CodeCaps update.
+    static var current: [ReaderStatus] {
+        all + EndpointPluginLoader.loadCached().map { descriptor in
+            ReaderStatus(providerKey: descriptor.providerKey, label: descriptor.displayName,
+                         source: "Endpoint plugin", optionalReaderID: descriptor.id)
+        }
+    }
 }
 
 // MARK: - Appearance
@@ -1125,7 +1136,9 @@ struct SettingsLogoStylePage: View {
 
     private var orderedKeys: [String] {
         if model.displaySections.isEmpty {
-            return ["claude", "cursor", "codex", "gemini", "antigravity", "grok", "grok-bot", "minimax"]
+            // Derive the pre-read fallback from the reader list so a new
+            // provider cannot be silently missing from this page.
+            return ReaderStatus.current.map(\.providerKey)
         }
         let live = Set(model.displaySections.map(\.id))
         let stored = model.platformOrder.filter(live.contains)
@@ -1142,6 +1155,11 @@ struct SettingsLogoStylePage: View {
     private func label(for rowId: String) -> String {
         if let match = model.displaySections.first(where: { $0.id == rowId }) {
             return match.title
+        }
+        // Built-in rows only here: this label is resolved per row, and the
+        // plugin-inclusive list reads the Plugins folder from disk.
+        if let reader = ReaderStatus.all.first(where: { $0.providerKey == rowId }) {
+            return reader.label
         }
         switch rowId {
         case "claude", "anthropic": return "Claude Code"

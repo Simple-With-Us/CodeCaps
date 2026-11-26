@@ -24,11 +24,11 @@ struct RunawayAlertsPage: View {
 
     private var calibrationDescription: String {
         if summary.days >= 7.0 {
-            return "Fully calibrated.  Evaluates current burn against your 7-day rolling average and worst peak hour."
+            return "Fully calibrated." + sentenceGap + "Evaluates current burn against your 7-day rolling average and worst peak hour."
         } else if summary.days >= 0.2 {
-            return "Calibrated for peak alerts.  Collecting additional readings to calibrate your full 7-day average baseline."
+            return "Calibrated for peak alerts." + sentenceGap + "Collecting additional readings to calibrate your full 7-day average baseline."
         } else {
-            return "Collecting baseline history.  CodeCaps records usage samples every refresh to establish your normal burn pattern."
+            return "Collecting baseline history." + sentenceGap + "CodeCaps records usage samples every refresh to establish your normal burn pattern."
         }
     }
 

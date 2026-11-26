@@ -537,7 +537,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             button.title = " \(title)"
         }
 
-        button.toolTip = "CodeCaps · \(detail)"
+        button.toolTip = "CodeCaps · \(detail) — right-click for commands"
         button.setAccessibilityLabel("CodeCaps, \(detail)")
     }
 

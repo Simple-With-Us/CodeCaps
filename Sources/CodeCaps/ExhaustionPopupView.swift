@@ -141,6 +141,13 @@ final class ExhaustionPopupController {
 
     private func scheduleExpiry(for id: UUID) {
         expireTask?.cancel()
+        // A warning that vanishes on a timer can disappear before a
+        // VoiceOver or Reduce Motion user has read it; for them it stays
+        // until dismissed.
+        if NSWorkspace.shared.isVoiceOverEnabled || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            expireTask = nil
+            return
+        }
         expireTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.autoExpire * 1_000_000_000))
             guard !Task.isCancelled, let self, self.shownId == id else { return }

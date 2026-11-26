@@ -1142,6 +1142,7 @@ enum QuotaProviders {
         "alibaba-token-plan": "Alibaba Token Plan",
         "alibaba-coding-plan": "Alibaba Coding Plan",
         "mimo-token-plan": "Xiaomi MiMo Token Plan",
+        "opencode-go": "OpenCode Go",
     ]
 
     static func canonicalKey(provider: String, providerKey: String?, via: String?) -> String {

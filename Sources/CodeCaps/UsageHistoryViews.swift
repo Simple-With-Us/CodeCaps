@@ -377,7 +377,7 @@ struct UsageHistoryView: View {
                     + "Diamonds mark scheduled resets; green squares mark mid-cycle vendor resets; amber squares mark likely plan changes; amber dashed lines mark runaway alerts.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Text("Burn stats are based on % of quota over time, unless absolute token data is available for the platform — in which case the detector prefers the absolute figures.")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .multilineTextAlignment(.trailing)
             }

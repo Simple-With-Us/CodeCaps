@@ -102,7 +102,38 @@ public actor QuotaPublisher {
         session.invalidateAndCancel()
     }
 
+    /// Publishes, retrying a transient gateway answer twice for the v2
+    /// format.  V2 event ids are derived from the reading itself, so a
+    /// retry is counted as a duplicate by the ingest, never as a second
+    /// reading.  The generic webhook has no such guarantee and is sent once.
     public func publish(
+        windows: [QuotaWindow],
+        to endpoint: URL,
+        token: String? = nil,
+        format: QuotaSyncFormat = .usageMonitorV2,
+        machineName: String? = nil
+    ) async throws -> QuotaPublishResult {
+        let maxAttempts = format == .usageMonitorV2 ? 3 : 1
+        var attempt = 0
+        while true {
+            do {
+                return try await publishOnce(
+                    windows: windows, to: endpoint, token: token, format: format, machineName: machineName)
+            } catch let error as QuotaPublisherError {
+                attempt += 1
+                let retryable: Bool
+                switch error {
+                case .httpStatus(let status, _): retryable = [502, 503, 504].contains(status)
+                case .timedOut: retryable = true
+                default: retryable = false
+                }
+                guard retryable, attempt < maxAttempts else { throw error }
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000)
+            }
+        }
+    }
+
+    private func publishOnce(
         windows: [QuotaWindow],
         to endpoint: URL,
         token: String? = nil,

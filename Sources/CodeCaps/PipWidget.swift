@@ -960,11 +960,12 @@ struct PipWidgetView: View {
     // MARK: Header
 
     /// Close, or Back when a platform detail is open.  It floats over the
-    /// rows' top-right corner and appears only on hover, so it never occupies
-    /// permanent space above the numbers.
+    /// rows' top-right corner and appears on hover, so it never occupies
+    /// permanent space above the numbers.  VoiceOver users get it
+    /// permanently: hover is not a discovery path they can use.
     @ViewBuilder
     private var floatingControl: some View {
-        if isHovering {
+        if isHovering || NSWorkspace.shared.isVoiceOverEnabled {
             if detailRow == nil {
                 HStack(spacing: 5) {
                     settingsButton
@@ -1099,7 +1100,7 @@ struct PipWidgetView: View {
                 // Say so, rather than letting a pinned row look absent.  It
                 // sits under the scroll view so it never scrolls away itself.
                 Text("\(targetRows.count - max(1, visible)) more pinned — scroll")
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(background.countdownInk)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, PipMetrics.padding)
@@ -1233,6 +1234,10 @@ struct PipWidgetView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { detailRowId = row.id }
+        // Keyboard activation for the same action the tap performs, so the
+        // row is reachable and operable without a pointer.
+        .focusable()
+        .onKeyPress(.return) { detailRowId = row.id; return .handled }
         .help(row.title)
         .accessibilityLabel("\(row.title) — open details")
         .accessibilityAddTraits(.isButton)
@@ -1277,7 +1282,7 @@ struct PipWidgetView: View {
                     Spacer(minLength: 0)
                     if row.section.expected, row.section.windows.isEmpty {
                         Text("No readings published")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(Theme.warning)
                             .lineLimit(1)
                     }
@@ -1335,7 +1340,7 @@ struct PipWidgetView: View {
 
         return HStack(spacing: PipMetrics.meterSpacing) {
             Text(cadenceCaption)
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(background.countdownInk)
                 .frame(width: PipMetrics.cadenceWidth, alignment: .leading)
 

@@ -337,7 +337,7 @@ struct ConsoleView: View {
                     .accessibilityHidden(true)
             }
             if let unavailable = state.unavailableAlert {
-                Text("Alert source unavailable: \(unavailable.providerKey)\(unavailable.windowId.map { " · \($0)" } ?? "").  Check Sources & Fleet for this provider.")
+                Text("Alert source unavailable: \(unavailable.providerKey)\(unavailable.windowId.map { " · \($0)" } ?? "").\(sentenceGap)Check Sources & Fleet for this provider.")
                     .font(.callout)
                     .foregroundStyle(Theme.warning)
                     .padding(.horizontal, Metrics.pagePadding)
@@ -448,6 +448,10 @@ private struct ConsoleSidebarSplitter: View {
     @State private var isHovering = false
     @State private var dragStart: CGFloat?
 
+    private func persistWidth() {
+        UserDefaults.standard.set(Double(width), forKey: "consoleSidebarWidth")
+    }
+
     var body: some View {
         ZStack {
             Rectangle()
@@ -488,6 +492,14 @@ private struct ConsoleSidebarSplitter: View {
         // owner picked, so the grabber glowed system blue next to an accent
         // that was doing everything else in the sidebar.
         .background(isHovering ? Theme.accent.opacity(0.15) : Color.clear)
+        // The drag is pointer-only, so the same resize is offered to the
+        // keyboard: focus the splitter and use the arrow keys.
+        .focusable()
+        .onKeyPress(.leftArrow) { width = max(Metrics.sidebarWidthMin, width - 8); persistWidth(); return .handled }
+        .onKeyPress(.rightArrow) { width = min(Metrics.sidebarWidthMax, width + 8); persistWidth(); return .handled }
+        .accessibilityLabel("Sidebar width")
+        .accessibilityValue("\(Int(width)) points")
+        .accessibilityHint("Use the left and right arrow keys to resize the sidebar")
     }
 }
 

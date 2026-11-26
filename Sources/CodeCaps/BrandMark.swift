@@ -9,10 +9,9 @@ import SwiftUI
 /// show the real mark instead of a stand-in.
 ///
 /// The menu bar keeps the owner's own black template icon, which is what that
-/// artwork is for and where it belongs.  The PiP widget header and the Glance
-/// popover header keep that same black template on purpose, so the template
-/// mark still appears in the menu bar and in those two headers, and nowhere
-/// else.
+/// artwork is for and where it belongs.  The Glance popover header shows the
+/// colour mark on its light ground (see `GlanceBrandMark`), so the template
+/// mark itself appears only in the menu bar.
 public enum BrandMarkImage {
     /// The mark, loaded once.  The asset is a required, bundled resource:
     /// `BrandAssetTests` fails the test suite, and so CI, if the bundle ever

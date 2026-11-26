@@ -152,6 +152,14 @@ final class SnapshotTerminationIntegrationTests: XCTestCase {
         XCTAssertFalse(model.contains("sem.wait("))
     }
 
+    func testSnapshotWriteChainBoundsPredecessorWaitAndReportsFailure() throws {
+        let model = try source("MonitorModel.swift")
+        XCTAssertTrue(model.contains("static let snapshotWritePredecessorTimeout: Duration = .seconds(10)"))
+        XCTAssertTrue(model.contains("for: previous, timeout: Self.snapshotWritePredecessorTimeout"))
+        XCTAssertFalse(model.contains("await previous?.value"),
+                       "an unbounded predecessor wait stalls every later snapshot write behind one stuck disk write")
+    }
+
     func testDisableQueuesRemovalAndWidgetUsesCompletionTimeOrder() throws {
         let model = try source("MonitorModel.swift")
         let disable = try XCTUnwrap(model.range(of: "func setLocalEnabled("))

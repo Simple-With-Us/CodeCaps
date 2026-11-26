@@ -384,7 +384,7 @@ struct GlancePopover: View {
                 Text("Open CodeCaps")
                 Text("⌘1")
                     .font(.caption2.weight(.medium))
-                    .foregroundStyle(colorScheme == .dark ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
+                    .foregroundStyle(Theme.onAccent.opacity(0.75))
             }
         }
         .buttonStyle(GlanceFooterProminentButtonStyle(model: model))
@@ -1943,10 +1943,10 @@ struct GlanceMeterColumns: View {
         } else if let gap, !gap.isEmpty {
             Text(gap)
                 .font(.caption2)
-                .foregroundStyle(Theme.ink.opacity(0.62))
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)
                 .lineLimit(3)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.85)
                 .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
                 .accessibilityLabel(gap)
         } else {
