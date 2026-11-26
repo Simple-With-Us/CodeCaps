@@ -34,18 +34,32 @@ public enum EndpointPluginLoader {
         // stamping the cache, so a folder created a moment later is seen
         // on the next access instead of after the TTL.
         guard FileManager.default.fileExists(atPath: defaultDirectory.path) else { return [] }
+        // Snapshot under the lock, scan off it, then re-acquire only to
+        // publish: holding the lock across the disk scan would serialize
+        // every Settings and toggle caller behind the full read.
         cache.lock.lock()
-        defer { cache.lock.unlock() }
-        if Date().timeIntervalSince(cache.loadedAt) <= ttl { return cache.descriptors }
+        if Date().timeIntervalSince(cache.loadedAt) <= ttl {
+            let fresh = cache.descriptors
+            cache.lock.unlock()
+            return fresh
+        }
+        let stale = cache.descriptors
+        cache.lock.unlock()
         // A scan that cannot even list the folder is transient: serve the
         // last good rows and retry on the next access rather than caching
         // the failure for the full TTL.
         guard (try? FileManager.default.contentsOfDirectory(
             at: defaultDirectory, includingPropertiesForKeys: nil)) != nil else {
-            return cache.descriptors
+            return stale
         }
-        cache.descriptors = load()
-        cache.loadedAt = Date()
+        let scanned = load()
+        cache.lock.lock()
+        defer { cache.lock.unlock() }
+        // Another caller may have published a fresher scan meanwhile.
+        if Date().timeIntervalSince(cache.loadedAt) > ttl {
+            cache.descriptors = scanned
+            cache.loadedAt = Date()
+        }
         return cache.descriptors
     }
 
