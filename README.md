@@ -1,4 +1,4 @@
-<p><img src="assets/icon-1024.png" alt="CodeCaps logo" width="96" height="96"></p>
+<p><img src="assets/brand/codecaps-logo-transparent.svg" alt="CodeCaps logo" width="96" height="96"></p>
 
 # CodeCaps
 
