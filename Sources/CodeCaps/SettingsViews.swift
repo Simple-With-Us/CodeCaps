@@ -1030,7 +1030,7 @@ struct ReaderStatus {
     /// the Plugins folder, so a plugin subscription can be toggled in
     /// Settings without a CodeCaps update.
     static var current: [ReaderStatus] {
-        all + EndpointPluginLoader.load().map { descriptor in
+        all + EndpointPluginLoader.loadCached().map { descriptor in
             ReaderStatus(providerKey: descriptor.providerKey, label: descriptor.displayName,
                          source: "Endpoint plugin", optionalReaderID: descriptor.id)
         }

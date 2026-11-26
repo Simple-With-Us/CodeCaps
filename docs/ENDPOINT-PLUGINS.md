@@ -21,7 +21,7 @@ file removes the plan at the next refresh.
   "displayName": "Acme Plan",
   "providerKey": "acme-plan",
   "endpoint": "https://api.example.com/usage",
-  "auth": { "type": "bearerEnv", "env": "ACME_API_KEY" },
+  "auth": { "type": "bearerEnv", "env": "CODECAPS_PLUGIN_ACME_API_KEY" },
   "windows": [
     {
       "idSuffix": "monthly",
@@ -34,7 +34,7 @@ file removes the plan at the next refresh.
 }
 ```
 
-With `ACME_API_KEY` in CodeCaps' environment, the plugin sends it as a
+With `CODECAPS_PLUGIN_ACME_API_KEY` in CodeCaps' environment, the plugin sends it as a
 Bearer token, reads `usage.monthly.percent` as the used percentage, and
 shows the remaining percentage resetting at `usage.monthly.resetsAt`.
 
@@ -46,7 +46,7 @@ shows the remaining percentage resetting at `usage.monthly.resetsAt`.
 | `displayName` | Row label in Settings and quota cards |
 | `providerKey` | Lowercase slug the windows are filed under; built-in provider keys are reserved and refused |
 | `endpoint` | One GET endpoint; HTTPS only (loopback HTTP needs `"allowLoopback": true`), no query, fragment, or credentials in the URL |
-| `auth` | `{ "type": "none" }` or `{ "type": "bearerEnv", "env": "VAR_NAME" }`; the token value never lives in the file and is never logged |
+| `auth` | `{ "type": "none" }` or `{ "type": "bearerEnv", "env": "CODECAPS_PLUGIN_VAR_NAME" }` (only `CODECAPS_PLUGIN_`-prefixed variables may be named, so a plugin can never send a general-purpose secret); the token value never lives in the file and is never logged |
 | `windows` | 1–10 windows; each needs a remaining-percent path, a used-percent path, or an absolute remaining/limit path pair |
 
 Window paths use a restricted dot/index grammar (`usage.monthly.percent`,

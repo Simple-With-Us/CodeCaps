@@ -95,14 +95,21 @@ public struct EndpointPluginDescriptor: Codable, Equatable, Sendable {
     /// Why a descriptor was refused.  The text is shown nowhere with the file
     /// contents; it exists for tests and for a one-line Settings note.
     public enum ValidationError: Error, Equatable, Sendable {
-        case badID, badProviderKey, reservedProviderKey, badEndpoint, badAuth, badWindows, badPath(String)
+        case badID, badDisplayName, badProviderKey, reservedProviderKey, badEndpoint, badAuth, badWindows, badPath(String)
+    }
+
+    /// The only environment variables a plugin may send: a plugin file can
+    /// name a purpose-made variable, never a general-purpose secret that
+    /// happens to be in the app's environment.
+    public static func isPluginEnvName(_ name: String) -> Bool {
+        name.range(of: "^CODECAPS_PLUGIN_[A-Z0-9_]{1,100}$", options: .regularExpression) != nil
     }
 
     public func validated() throws -> EndpointPluginDescriptor {
         guard Self.isSlug(id, prefix: "plugin:") else { throw ValidationError.badID }
         guard Self.isSlug(providerKey, prefix: "") else { throw ValidationError.badProviderKey }
         guard !Self.reservedProviderKeys.contains(providerKey) else { throw ValidationError.reservedProviderKey }
-        guard (1...200).contains(displayName.count), !displayName.contains("\n") else { throw ValidationError.badID }
+        guard (1...200).contains(displayName.count), !displayName.contains("\n") else { throw ValidationError.badDisplayName }
         guard let url = Self.validatedEndpoint(endpoint, allowLoopback: allowLoopback ?? false) else {
             throw ValidationError.badEndpoint
         }
@@ -111,16 +118,17 @@ public struct EndpointPluginDescriptor: Codable, Equatable, Sendable {
         case .none:
             if auth.env != nil { throw ValidationError.badAuth }
         case .bearerEnv:
-            guard let env = auth.env,
-                  env.range(of: "^[A-Za-z_][A-Za-z0-9_]{0,127}$", options: .regularExpression) != nil
+            guard let env = auth.env, Self.isPluginEnvName(env)
             else { throw ValidationError.badAuth }
         }
         guard (1...10).contains(windows.count) else { throw ValidationError.badWindows }
         var suffixes = Set<String>()
         for window in windows {
+            let percentPaths = [window.remainingPercentPath, window.usedPercentPath].compactMap { $0 }.count
             guard Self.isSlug(window.idSuffix, prefix: ""), suffixes.insert(window.idSuffix).inserted,
                   (1...80).contains(window.label.count),
-                  (window.remainingPercentPath == nil) != (window.usedPercentPath == nil)
+                  percentPaths <= 1,
+                  percentPaths == 1
                     || (window.absoluteRemainingPath != nil && window.absoluteLimitPath != nil)
             else { throw ValidationError.badWindows }
             for path in [window.remainingPercentPath, window.usedPercentPath, window.absoluteRemainingPath,
@@ -159,21 +167,43 @@ public struct EndpointPluginDescriptor: Codable, Equatable, Sendable {
         guard let components = URLComponents(string: raw),
               let rawHost = components.host?.lowercased(), !rawHost.isEmpty,
               components.user == nil, components.password == nil,
-              components.query == nil, components.fragment == nil,
-              components.port == nil || components.port == 443 || allowLoopback else { return nil }
+              components.query == nil, components.fragment == nil else { return nil }
         // An IPv6 literal may still carry its brackets depending on the
         // URL parser; compare the bare address either way.
         let host = rawHost.hasPrefix("[") && rawHost.hasSuffix("]")
             ? String(rawHost.dropFirst().dropLast()) : rawHost
         let loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
+        // The port relaxation belongs to loopback only; an external host
+        // keeps the default-or-443 rule even when the opt-in is set.
+        if let port = components.port, port != 443 {
+            guard allowLoopback, loopback else { return nil }
+        }
         if components.scheme == "http" {
             guard allowLoopback, loopback else { return nil }
         } else {
             guard components.scheme == "https" else { return nil }
         }
         if loopback { return allowLoopback ? components.url : nil }
-        if isPrivateLiteralIP(host) { return nil }
+        if isPrivateLiteralIP(host) || isNonCanonicalIPLiteral(host) { return nil }
         return components.url
+    }
+
+    /// A host written like an IP address but not as a strict decimal
+    /// dotted quad — hex (`0x7f.0.0.1`), octal (`0177.0.0.1`), a bare
+    /// integer (`2130706433`), or a leading-zero octet — can be resolved
+    /// by the network stack as the private address it disguises, so it is
+    /// refused outright rather than classified as a public hostname.
+    static func isNonCanonicalIPLiteral(_ host: String) -> Bool {
+        let segments = host.split(separator: ".", omittingEmptySubsequences: false)
+        let numericLike = segments.allSatisfy { segment in
+            !segment.isEmpty && segment.range(of: "^(0[xX][0-9a-fA-F]+|[0-9]+)$", options: .regularExpression) != nil
+        }
+        guard numericLike, segments.contains(where: { Int($0) != nil || $0.lowercased().hasPrefix("0x") }) else { return false }
+        guard segments.count == 4 else { return true }
+        return segments.contains { segment in
+            guard let value = Int(segment), String(value) == segment, (0...255).contains(value) else { return true }
+            return false
+        }
     }
 
     static func isPrivateLiteralIP(_ host: String) -> Bool {

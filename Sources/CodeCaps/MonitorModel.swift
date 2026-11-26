@@ -1356,7 +1356,8 @@ final class MonitorModel: ObservableObject {
         // folder can be toggled without relaunching the app.  Building the
         // registry only creates factory closures; none is invoked here.
         let live = LocalQuotaReaderRegistry.configured(
-            zCodeCredentialProvider: { nil }, mimoCredentialProvider: { nil })
+            zCodeCredentialProvider: { nil }, mimoCredentialProvider: { nil },
+            pluginDescriptors: EndpointPluginLoader.loadCached())
         guard live.optionalRegistrations.contains(where: { $0.id == readerID }),
               optionalQuotaReaderPreferences.isEnabled(readerID) != enabled else { return }
         var preferences = optionalQuotaReaderPreferences

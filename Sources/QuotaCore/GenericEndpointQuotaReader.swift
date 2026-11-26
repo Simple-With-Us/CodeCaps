@@ -28,7 +28,13 @@ public struct GenericEndpointQuotaReader: LocalQuotaReading, Sendable {
             self.token = { nil }
         case .bearerEnv:
             let name = descriptor.auth.env ?? ""
-            self.token = { environment[name].flatMap { $0.isEmpty ? nil : $0 } }
+            // Defence in depth behind descriptor validation: only a
+            // purpose-made plugin variable is ever read, whatever a
+            // hand-built descriptor claims.
+            self.token = {
+                guard EndpointPluginDescriptor.isPluginEnvName(name) else { return nil }
+                return environment[name].flatMap { $0.isEmpty ? nil : $0 }
+            }
         }
         self.fetch = fetch ?? Self.makeFetcher()
     }
@@ -46,7 +52,7 @@ public struct GenericEndpointQuotaReader: LocalQuotaReading, Sendable {
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             if descriptor.auth.type == .bearerEnv {
                 guard let token = token() else {
-                    return LocalQuotaResult(issues: [id: "\(descriptor.displayName) plugin needs its configured sign-in key."])
+                    return LocalQuotaResult(issues: [id: "\(descriptor.displayName) plugin needs the \(descriptor.auth.env ?? "configured") environment variable set."])
                 }
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
@@ -91,8 +97,10 @@ public struct GenericEndpointQuotaReader: LocalQuotaReading, Sendable {
             } else {
                 remaining = nil
             }
-            guard let remaining, remaining.isFinite else { return nil }
-            let bounded = min(100, max(0, remaining))
+            // An out-of-range percentage is a broken endpoint answer, not
+            // a full or empty quota; drop the window as unreadable.
+            guard let remaining, remaining.isFinite, (0...100).contains(remaining) else { return nil }
+            let bounded = remaining
             return QuotaWindow(
                 id: descriptor.providerKey + ":" + spec.idSuffix,
                 provider: descriptor.providerKey, providerKey: descriptor.providerKey,

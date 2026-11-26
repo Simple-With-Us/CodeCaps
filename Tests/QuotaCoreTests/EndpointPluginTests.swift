@@ -38,12 +38,43 @@ final class EndpointPluginTests: XCTestCase {
             "https://172.16.0.5/usage",
             "https://192.168.1.5/usage",
             "https://[::1]/usage",
+            "https://0x7f.0.0.1/usage",
+            "https://0177.0.0.1/usage",
+            "https://2130706433/usage",
+            "https://08.8.8.8/usage",
             "ftp://api.example.com/usage",
         ]
         for endpoint in refused {
             XCTAssertThrowsError(try descriptor(endpoint: endpoint).validated(), endpoint)
         }
         XCTAssertNoThrow(try descriptor(endpoint: "https://8.8.8.8/usage").validated())
+    }
+
+    func testExternalHostKeepsDefaultPortEvenWithLoopbackOptIn() throws {
+        var external = descriptor(endpoint: "https://8.8.8.8:8080/usage")
+        external.allowLoopback = true
+        XCTAssertThrowsError(try external.validated())
+    }
+
+    func testBothPercentPathsAreRefusedEvenWithAbsolutes() {
+        var both = descriptor()
+        both.windows[0].remainingPercentPath = "usage.monthly.remaining"
+        both.windows[0].absoluteRemainingPath = "usage.monthly.left"
+        both.windows[0].absoluteLimitPath = "usage.monthly.total"
+        XCTAssertThrowsError(try both.validated())
+    }
+
+    func testBadDisplayNameHasItsOwnError() {
+        var bad = descriptor()
+        bad.displayName = ""
+        XCTAssertThrowsError(try bad.validated()) { error in
+            XCTAssertEqual(error as? EndpointPluginDescriptor.ValidationError, .badDisplayName)
+        }
+    }
+
+    func testNonPluginEnvNameIsRefused() {
+        XCTAssertThrowsError(try descriptor(auth: .init(type: .bearerEnv, env: "AWS_SECRET_ACCESS_KEY")).validated())
+        XCTAssertNoThrow(try descriptor(auth: .init(type: .bearerEnv, env: "CODECAPS_PLUGIN_ACME_API_KEY")).validated())
     }
 
     func testLoopbackNeedsExplicitOptIn() throws {
@@ -83,14 +114,29 @@ final class EndpointPluginTests: XCTestCase {
         XCTAssertEqual(result.windows.first?.source, "plugin:acme")
     }
 
+    func testGenericReaderDropsOutOfRangePercent() async {
+        let reader = GenericEndpointQuotaReader(
+            descriptor: descriptor(), environment: [:],
+            now: { Date(timeIntervalSince1970: 0) },
+            fetch: { _ in
+                let response = HTTPURLResponse(
+                    url: URL(string: "https://api.example.com/usage")!,
+                    statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (Data(#"{"usage":{"monthly":{"percent":140}}}"#.utf8), response)
+            })
+        let result = await reader.read()
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertEqual(result.issues["acme-plan"], "Acme Plan returned no readable quota.")
+    }
+
     func testGenericReaderMissingEnvKeyReportsSignIn() async {
         let reader = GenericEndpointQuotaReader(
-            descriptor: descriptor(auth: .init(type: .bearerEnv, env: "ACME_MISSING_KEY")),
+            descriptor: descriptor(auth: .init(type: .bearerEnv, env: "CODECAPS_PLUGIN_ACME_KEY")),
             environment: [:],
             fetch: { _ in XCTFail("fetch must not run without the configured key"); throw URLError(.badURL) })
         let result = await reader.read()
         XCTAssertTrue(result.windows.isEmpty)
-        XCTAssertEqual(result.issues["acme-plan"], "Acme Plan plugin needs its configured sign-in key.")
+        XCTAssertEqual(result.issues["acme-plan"], "Acme Plan plugin needs the CODECAPS_PLUGIN_ACME_KEY environment variable set.")
     }
 
     func testLoaderSkipsInvalidAndDuplicateFiles() throws {

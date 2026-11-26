@@ -17,6 +17,27 @@ public enum EndpointPluginLoader {
             .appendingPathComponent("Library/Application Support/CodeCaps/Plugins", isDirectory: true)
     }
 
+    private final class Cache: @unchecked Sendable {
+        let lock = NSLock()
+        var descriptors: [EndpointPluginDescriptor] = []
+        var loadedAt: Date = .distantPast
+    }
+
+    private static let cache = Cache()
+
+    /// A short-lived cache of the default folder for main-thread callers
+    /// (Settings rows, reader toggles) that cannot rescan the disk on every
+    /// access.  The refresh path keeps using `load()` directly, so a new
+    /// plugin file is picked up within one refresh regardless.
+    public static func loadCached(ttl: TimeInterval = 60) -> [EndpointPluginDescriptor] {
+        cache.lock.lock()
+        defer { cache.lock.unlock() }
+        if Date().timeIntervalSince(cache.loadedAt) <= ttl { return cache.descriptors }
+        cache.descriptors = load()
+        cache.loadedAt = Date()
+        return cache.descriptors
+    }
+
     public static func load(directory: URL = defaultDirectory) -> [EndpointPluginDescriptor] {
         let manager = FileManager.default
         guard let entries = try? manager.contentsOfDirectory(
