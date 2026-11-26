@@ -1,3 +1,5 @@
+<p><img src="assets/brand/codecaps-logo-transparent.svg" alt="CodeCaps logo" width="96" height="96"></p>
+
 # CodeCaps
 
 A macOS menu bar app for supported AI plan usage and quota windows.  It can share available readings across Macs through a collector you run.
