@@ -757,12 +757,15 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         // countdown.  `currentWindows` drops that awaiting-refresh window
         // before the pairing sees it, so a pool with a due 5h and a live 7d
         // showed only the 7d in the HUD while the dropdown showed both
-        // (owner, 2026-11-27, Antigravity Third-Party).  When the narrow set
-        // came up short, re-pair over the same drawable set the dropdown
+        // (owner, 2026-11-27, Antigravity Third-Party).  When a drawable row
+        // comes up short, re-pair over the same drawable set the dropdown
         // uses (supplementary, masked, and disabled sources still excluded,
-        // so the HUD never draws a window its surfaces turned off).  A
-        // failed row keeps its status words instead of meters.
-        if out.count < 2, issue == nil {
+        // so the HUD never draws a window its surfaces turned off).  The
+        // rescue fires only when the row has current windows at all:  a row
+        // whose every period has ended, or whose sources are off, keeps its
+        // empty meter set so its status words carry the story (CI, 2026-11-
+        // 27, PipInteractionTests).
+        if !windows.isEmpty, out.count < 2, issue == nil {
             let drawable = row.section.windows
                 .filter {
                     !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
