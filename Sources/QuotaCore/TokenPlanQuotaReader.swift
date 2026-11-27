@@ -41,7 +41,7 @@ struct MiMoTokenPlanReader: LocalQuotaReading {
     func read() async -> LocalQuotaResult {
         let id = "mimo-token-plan"
         guard let credential = await credential(), credential.isValid else {
-            return LocalQuotaResult(issues: [id: "Save an individual MiMo Token Plan key in Sources & Fleet."])
+            return LocalQuotaResult(issues: [id: "Save an individual MiMo Token Plan key in Platforms & Sources."])
         }
         var request = URLRequest(url: credential.region.quotaURL)
         request.httpMethod = "GET"

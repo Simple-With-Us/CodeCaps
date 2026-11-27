@@ -358,6 +358,13 @@ private static let resourceNames: [String: String] = [
     "cursor": "cursor",
     "github-copilot": "copilot",
     "copilot": "copilot",
+    // Alibaba's two plans share the one brand mark; the provider keys stay
+    // the stable quota-reader ids (owner, 2026-11-27: "Alibaba logo
+    // probably").
+    "alibaba-token-plan": "alibaba",
+    "alibaba-coding-plan": "alibaba",
+    "mimo-token-plan": "mimo",
+    "opencode-go": "opencode-go",
 ]
 
 /// The file a style and appearance ask for, or `nil` when the mark is absent.

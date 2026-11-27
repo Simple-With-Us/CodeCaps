@@ -113,12 +113,19 @@ final class ConsolePageStorageTests: XCTestCase {
         let pages: [ConsolePage] = [
             .allPlatforms,
             .platform("anthropic"), .platform("google-antigravity:gemini"),
-            .platform("a:b"), .settingsMenuBar, .settingsPlatforms, .settingsSourcesFleet,
+            .platform("a:b"), .settingsMenuBar, .settingsSourcesFleet,
             .settingsAppearance, .settingsAbout,
         ]
         for page in pages {
             XCTAssertEqual(ConsolePage.fromStorageKey(page.storageKey), page, "\(page.storageKey)")
         }
+    }
+
+    /// The old Platforms page merged into Platforms & Sources (owner,
+    /// 2026-11-27): the case is gone, and a persisted selection under the old
+    /// storage key lands on the merged page instead of being dropped.
+    func testLegacyPlatformsStorageKeyMapsToTheMergedPage() {
+        XCTAssertEqual(ConsolePage.fromStorageKey("settingsPlatforms"), .settingsSourcesFleet)
     }
 
     func testAnUnknownKeyIsRejectedRatherThanGuessed() {

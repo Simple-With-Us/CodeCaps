@@ -275,120 +275,23 @@ struct PipOptionsReorderList: View {
     }
 }
 
-// MARK: - Platforms
+// MARK: - Platforms & Sources
 
-struct SettingsPlatformsPage: View {
-    @ObservedObject var model: MonitorModel
-    @State private var selection: String?
-
-    private var orderedKeys: [String] {
-        let live = model.sections.map(\.providerKey)
-        guard !model.platformOrder.isEmpty else { return live }
-        let ordered = model.platformOrder.filter(live.contains)
-        return ordered + live.filter { !ordered.contains($0) }
-    }
-
-    private func label(for providerKey: String) -> String {
-        model.sections.first { $0.providerKey == providerKey }?.providerLabel ?? providerKey
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Drag to reorder." + sentenceGap
-                 + "A platform's switch hides it from the dashboard — the quota list, the Docked Bar, and the menu bar — without stopping its refreshes.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            // A plain List outside a Form group, because `.onMove`'s drop
-            // indicator misbehaves inside `.formStyle(.grouped)`.
-            List(selection: $selection) {
-                ForEach(orderedKeys, id: \.self) { providerKey in
-                    HStack(spacing: 10) {
-                        Image(systemName: "line.3.horizontal")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-                            .help("Drag to Reorder")
-                            .accessibilityHidden(true)
-                        PlatformLogo(providerKey: providerKey, size: 16,
-                                     style: model.markStyle(for: providerKey))
-                        Text(label(for: providerKey))
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(model.isProviderVisible(providerKey) ? Theme.ink : .secondary)
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { model.isProviderVisible(providerKey) },
-                            set: { model.setProviderVisible($0, providerKey: providerKey) }))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-                            .help(model.isProviderVisible(providerKey)
-                                  ? "Hide \(label(for: providerKey)) from the dashboard"
-                                  : "Show \(label(for: providerKey)) in the dashboard")
-                            .accessibilityLabel(model.isProviderVisible(providerKey)
-                                                ? "Hide \(label(for: providerKey)) from the dashboard"
-                                                : "Show \(label(for: providerKey)) in the dashboard")
-                    }
-                    .tag(providerKey)
-                    .accessibilityLabel("\(label(for: providerKey)), position \((orderedKeys.firstIndex(of: providerKey) ?? 0) + 1) of \(orderedKeys.count)")
-                }
-                .onMove(perform: move)
-            }
-            .listStyle(.inset)
-            // One expression, because a `minHeight` of 240 above a `maxHeight`
-            // of 226 (seven platforms) clipped the last row by 14pt.
-            .frame(height: max(240, CGFloat(orderedKeys.count) * 30 + 16))
-
-            HStack(spacing: 8) {
-                // Visible equivalents of the Option+Command arrow shortcuts
-                // above: drag-to-reorder alone cannot be operated with a
-                // keyboard or VoiceOver (Slice 4, FIX-A11Y-KEYBOARD).
-                Button("Move Up") { moveSelection(by: -1) }
-                    .disabled(selection == nil || selection == orderedKeys.first)
-                    .help("Move Up")
-                    .accessibilityLabel("Move Up")
-                Button("Move Down") { moveSelection(by: 1) }
-                    .disabled(selection == nil || selection == orderedKeys.last)
-                    .help("Move Down")
-                    .accessibilityLabel("Move Down")
-                Spacer()
-                Button("Reset Default Order") { model.resetPlatformOrder() }
-                    .help("Reset Default Order")
-                    .accessibilityLabel("Reset Default Order")
-            }
-        }
-        .padding(Metrics.pagePadding)
-        .background {
-            // Keyboard equivalents for the drag the chevrons used to stand in for.
-            VStack {
-                Button("") { moveSelection(by: -1) }
-                    .keyboardShortcut(.upArrow, modifiers: [.option, .command])
-                Button("") { moveSelection(by: 1) }
-                    .keyboardShortcut(.downArrow, modifiers: [.option, .command])
-            }
-            .opacity(0)
-            .accessibilityHidden(true)
-        }
-    }
-
-    private func move(from source: IndexSet, to destination: Int) {
-        var keys = orderedKeys
-        keys.move(fromOffsets: source, toOffset: destination)
-        model.platformOrder = keys
-    }
-
-    private func moveSelection(by delta: Int) {
-        guard let selection else { return }
-        if delta < 0 { model.movePlatformUp(providerKey: selection) }
-        else { model.movePlatformDown(providerKey: selection) }
-    }
-}
-
-// MARK: - Sources & Fleet
-
-struct SettingsSourcesFleetPage: View {
+/// The merged Platforms + Sources & Fleet settings page (owner, 2026-11-27).
+///
+/// One provider roster carries order, dashboard visibility, per-provider
+/// reading setup, and per-source ranking; machine-level plumbing, push, and
+/// pull keep their own sections below.  The two old pages answered different
+/// questions about the same provider and duplicated its controls with two
+/// same-looking switches that meant different things; here the roster's one
+/// switch always means dashboard visibility, and "stop reading" is a named
+/// control inside the provider's own detail.
+struct SettingsPlatformsAndSourcesPage: View {
     @ObservedObject var model: MonitorModel
 
+    // Fleet draft state.  One struct owns all of it:  the dirty tracking and
+    // the empty-endpoint deadlock guard read these together, and splitting
+    // them across child views would break both.
     @State private var syncEndpoint = ""
     @State private var syncToken = ""
     @State private var syncFormat: QuotaSyncFormat = .usageMonitorV2
@@ -414,6 +317,16 @@ struct SettingsSourcesFleetPage: View {
     @State private var claudeConsentMessage: String?
     @State private var claudeConsentSucceeded = false
 
+    /// Providers whose detail is expanded.  A row that carries a blocking
+    /// problem (consent, chiefly) starts expanded, so the fix shows without
+    /// hunting; the old page kept that button always visible.
+    @State private var expandedProviders: Set<String> = []
+    @State private var draggedProviderKey: String?
+    /// The row the hidden Option+Command arrow shortcuts act on.  A tap sets
+    /// it; VoiceOver rows move themselves through custom actions, and the
+    /// context menu covers pointer users who skipped the tap.
+    @State private var selectedProviderKey: String?
+
     private var pushDirty: Bool {
         pushEnabled != model.syncEnabled || syncEndpoint != model.syncEndpoint || syncFormat != model.syncFormat || !syncToken.isEmpty
     }
@@ -429,15 +342,11 @@ struct SettingsSourcesFleetPage: View {
 
     var body: some View {
         SettingsPage {
-            Section {
-                Link("Setup & Data Guide", destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!)
-                Text("Turn on this Mac, sharing, and other devices separately.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            providersSection
             thisMacSection
-            sourcesRankSection
             shareSection
             pullSection
+            setupGuideSection
         }
         .onAppear {
             syncEndpoint = model.syncEndpoint
@@ -445,10 +354,395 @@ struct SettingsSourcesFleetPage: View {
             pullEndpoint = model.endpoint
             pushEnabled = model.syncEnabled
             pullEnabled = model.serverEnabled
+            expandedProviders.formUnion(claudeConsentKeys)
         }
         .task { await model.refreshSavedTokenStates() }
         .onChange(of: model.syncEnabled) { _, newValue in pushEnabled = newValue }
         .onChange(of: model.serverEnabled) { _, newValue in pullEnabled = newValue }
+        .background {
+            // Keyboard equivalents for the drag, kept from the old Platforms
+            // page and installed exactly once:  duplicating them per row
+            // would fire each shortcut twice.
+            VStack {
+                Button("") { moveSelected(by: -1) }
+                    .keyboardShortcut(.upArrow, modifiers: [.option, .command])
+                Button("") { moveSelected(by: 1) }
+                    .keyboardShortcut(.downArrow, modifiers: [.option, .command])
+            }
+            .opacity(0)
+            .accessibilityHidden(true)
+        }
+    }
+
+    // MARK: Providers roster
+
+    private var claudeConsentKeys: Set<String> {
+        Set(model.consentNeeded.filter { $0 == "anthropic" || $0 == "claude" })
+    }
+
+    /// Reader IDs that ship an inline setup view in the provider's detail.
+    /// Plugin readers and future providers get one by extending this set and
+    /// the view switch in `providerDetail`.
+    private static let setupHelpReaderIDs: Set<String> = ["zcode", "alibaba-token-plan", "mimo-token-plan"]
+
+    /// One canonical roster: every provider a reader knows about plus every
+    /// platform a live section reports, in the owner's platform order, with
+    /// never-ordered keys appended in reader order.  The old Platforms page
+    /// listed live sections only — empty before the first read — and the old
+    /// Sources list ordered by `ReaderStatus`, so a newly added provider
+    /// could exist on one page and miss the other.
+    private var rosterKeys: [String] {
+        var keys: [String] = []
+        var seen = Set<String>()
+        for candidate in ReaderStatus.current.map(\.providerKey) where !seen.contains(candidate) {
+            seen.insert(candidate)
+            keys.append(candidate)
+        }
+        for key in model.sections.map(\.providerKey) where !seen.contains(key) {
+            seen.insert(key)
+            keys.append(key)
+        }
+        guard !model.platformOrder.isEmpty else { return keys }
+        let ordered = model.platformOrder.filter(seen.contains)
+        return ordered + keys.filter { !ordered.contains($0) }
+    }
+
+    private func rosterLabel(for providerKey: String) -> String {
+        if let live = model.sections.first(where: { $0.providerKey == providerKey })?.providerLabel {
+            return live
+        }
+        return ReaderStatus.current.first { $0.providerKey == providerKey }?.label ?? providerKey
+    }
+
+    private func reader(for providerKey: String) -> ReaderStatus? {
+        ReaderStatus.current.first { $0.providerKey == providerKey }
+    }
+
+    private func needsConsent(_ providerKey: String) -> Bool {
+        claudeConsentKeys.contains(providerKey)
+    }
+
+    /// Whether a row has anything to open.  Plain rows render no chevron and
+    /// never expand, so the roster stays scannable; expansion is an offer,
+    /// not a tab stop.
+    private func hasDetail(_ providerKey: String) -> Bool {
+        if needsConsent(providerKey) { return true }
+        if let optionalReaderID = reader(for: providerKey)?.optionalReaderID { return true }
+        return model.availableSources(for: providerKey).count > 1
+    }
+
+    private var providersSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(rosterKeys.enumerated()), id: \.element) { index, providerKey in
+                    rosterRow(providerKey, position: index + 1, total: rosterKeys.count)
+                    if index < rosterKeys.count - 1 {
+                        Divider()
+                            .padding(.leading, 40)
+                    }
+                }
+                HStack {
+                    Spacer()
+                    // The one visible secondary control: the drag handle is
+                    // primary, and reset belongs out of the row flow.
+                    Button("Reset Default Order") { model.resetPlatformOrder() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .help("Reset Default Order")
+                        .accessibilityLabel("Reset Default Order")
+                }
+                .padding(.top, 4)
+            }
+        } header: {
+            Eyebrow("PROVIDERS")
+        } footer: {
+            Text("Drag rows to set the order every surface uses — the Console cards, the Docked Bar, and the menu bar." + sentenceGap
+                 + "A switch hides a platform from the dashboard without stopping its refreshes." + sentenceGap
+                 + "Most plans read the sign-in already on this Mac; open a provider's detail for its reader switch, setup, and sources.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private func rosterRow(_ providerKey: String, position: Int, total: Int) -> some View {
+        let label = rosterLabel(for: providerKey)
+        let visible = model.isProviderVisible(providerKey)
+        let reader = reader(for: providerKey)
+        let issue = model.issues[providerKey]
+        let optionalEnabled = reader?.optionalReaderID.map(model.isOptionalQuotaReaderEnabled) ?? true
+        let sectionHasWindows = !(model.sections.first { $0.providerKey == providerKey }?.windows.isEmpty ?? true)
+        let healthy = optionalEnabled && issue == nil && sectionHasWindows
+        let expanded = expandedProviders.contains(providerKey)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .help("Drag to Reorder")
+                    .accessibilityHidden(true)
+                PlatformLogo(providerKey: providerKey, size: 16,
+                             style: model.markStyle(for: providerKey))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(label)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(visible ? Theme.ink : Color.secondary)
+                        .lineLimit(1)
+                    rowCaption(providerKey: providerKey, reader: reader,
+                               issue: issue, optionalEnabled: optionalEnabled)
+                }
+                if hasDetail(providerKey) {
+                    Button {
+                        toggleDetail(providerKey, expanded: expanded)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(expanded ? "Hide \(label) Detail" : "Show \(label) Detail")
+                    .accessibilityLabel(expanded ? "Hide \(label) Detail" : "Show \(label) Detail")
+                }
+                Spacer(minLength: 8)
+                // The glyph column is fixed so every switch on the page lands
+                // at the same x.  Hidden and reader-off rows already say why;
+                // the glyph would only repeat them.
+                if visible && optionalEnabled {
+                    Image(systemName: healthy ? "checkmark.circle" : "exclamationmark.triangle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(healthy ? Theme.success : Theme.warning)
+                        .frame(width: 16)
+                        .accessibilityHidden(true)
+                } else {
+                    Color.clear.frame(width: 16, height: 12)
+                }
+                Toggle("", isOn: Binding(
+                    get: { model.isProviderVisible(providerKey) },
+                    set: { model.setProviderVisible($0, providerKey: providerKey) }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .help(visible ? "Hide \(label) from the dashboard" : "Show \(label) in the dashboard")
+                    .accessibilityLabel(visible ? "Hide \(label) from the dashboard" : "Show \(label) in the dashboard")
+            }
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selectedProviderKey = providerKey
+                if hasDetail(providerKey) {
+                    toggleDetail(providerKey, expanded: expanded)
+                }
+            }
+            .onDrag {
+                draggedProviderKey = providerKey
+                return NSItemProvider(object: providerKey as NSString)
+            }
+            .onDrop(of: [UTType.text], delegate: ProviderRosterDropDelegate(
+                targetKey: providerKey,
+                draggedKey: $draggedProviderKey,
+                onMove: { moveProvider($0, onto: $1) }))
+            .contextMenu {
+                Button("Move Up") { moveProviderUp(providerKey) }
+                    .disabled(providerKey == rosterKeys.first)
+                Button("Move Down") { moveProviderDown(providerKey) }
+                    .disabled(providerKey == rosterKeys.last)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("\(label), position \(position) of \(total)")
+            .accessibilityCustomActions {
+                [
+                    AccessibilityCustomAction("Move Up") { _ in moveProviderUp(providerKey); return true },
+                    AccessibilityCustomAction("Move Down") { _ in moveProviderDown(providerKey); return true },
+                    AccessibilityCustomAction(expanded ? "Hide Detail" : "Show Detail") { _ in
+                        toggleDetail(providerKey, expanded: expanded)
+                        return true
+                    },
+                ]
+            }
+            if expanded, hasDetail(providerKey) {
+                providerDetail(providerKey, reader: reader)
+                    .padding(.leading, 40)
+                    .padding(.bottom, 6)
+            }
+        }
+    }
+
+    private func toggleDetail(_ providerKey: String, expanded: Bool) {
+        if expanded {
+            expandedProviders.remove(providerKey)
+        } else {
+            expandedProviders.insert(providerKey)
+        }
+    }
+
+    /// The caption under the provider name, in priority order: the problem
+    /// first, the off state second, then what the provider reads from.  A
+    /// multi-source provider gets a summary that also hints there is a
+    /// detail to open — no badge, no chip, one line.
+    @ViewBuilder
+    private func rowCaption(providerKey: String, reader: ReaderStatus?,
+                            issue: String?, optionalEnabled: Bool) -> some View {
+        if let issue {
+            Text(issue)
+                .font(.caption)
+                .foregroundStyle(Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if !optionalEnabled {
+            Text("Quota reads are off for this provider.")
+                .font(.caption)
+                .foregroundStyle(Color.secondary)
+        } else {
+            let sources = model.availableSources(for: providerKey)
+            let preferred = sources.first { !model.disabledSources.contains($0) }
+            Group {
+                if sources.count > 1, let preferred {
+                    Text("\(sources.count) sources · prefers \(preferred)")
+                } else if let reader {
+                    Text(reader.source)
+                        .help(reader.optionalReaderID == "alibaba-token-plan" ? AlibabaTokenPlanHelp.tooltip : "")
+                } else {
+                    Text("Local readings")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(Color.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+    }
+
+    @ViewBuilder
+    private func providerDetail(_ providerKey: String, reader: ReaderStatus?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if needsConsent(providerKey) { claudeConsentControls }
+            if let optionalReaderID = reader?.optionalReaderID {
+                // The reader switch lives here under its own name, because
+                // the roster switch means visibility.  Two same-looking
+                // switches with different consequences was the merge's
+                // reason to exist.
+                HStack {
+                    Text("Quota Reads On This Mac")
+                        .font(.caption.weight(.medium))
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { model.isOptionalQuotaReaderEnabled(optionalReaderID) },
+                        set: { model.setOptionalQuotaReaderEnabled($0, readerID: optionalReaderID) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .help(model.isOptionalQuotaReaderEnabled(optionalReaderID)
+                              ? "Turn Off \(reader?.label ?? providerKey) Quota Reads"
+                              : "Turn On \(reader?.label ?? providerKey) Quota Reads")
+                        .accessibilityLabel("Read \(reader?.label ?? providerKey) Quota")
+                }
+                if optionalReaderID == "zcode" { ZAIQuotaSettingsView(controller: model.zAIQuotaSetup) }
+                if optionalReaderID == "alibaba-token-plan" { AlibabaTokenPlanHelpView() }
+                if optionalReaderID == "mimo-token-plan" { MiMoQuotaSettings(model: model) }
+            }
+            sourceRankDetail(for: providerKey)
+        }
+    }
+
+    /// The provider's per-source enable + rank, shown only when more than
+    /// one source was observed — the Dashboard page should not tease a
+    /// control that has no effect.
+    @ViewBuilder
+    private func sourceRankDetail(for providerKey: String) -> some View {
+        let sources = model.availableSources(for: providerKey)
+        if sources.count > 1 {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Sources · Preferred First")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(sources.count) sources")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                ForEach(Array(sources.enumerated()), id: \.element) { index, source in
+                    sourceRow(source: source, index: index, total: sources.count,
+                              providerKey: providerKey)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sourceRow(source: String, index: Int, total: Int, providerKey: String) -> some View {
+        let enabled = !model.disabledSources.contains(source)
+        HStack(spacing: 8) {
+            Toggle("", isOn: Binding(
+                get: { enabled },
+                set: { model.setSourceEnabled($0, source, for: providerKey) }))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .help(enabled ? "Hide windows from \(source)" : "Show windows from \(source)")
+                .accessibilityLabel(enabled ? "Hide windows from \(source)" : "Show windows from \(source)")
+
+            Text(source)
+                .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(enabled ? Theme.ink : Color.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("#\(index + 1)")
+                .font(.system(.caption, design: .monospaced).weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 24, alignment: .trailing)
+
+            Button {
+                model.moveSource(source, by: -1, for: providerKey)
+            } label: {
+                Image(systemName: "arrow.up").font(.system(size: 10))
+            }
+            .buttonStyle(.borderless)
+            .disabled(index == 0)
+            .help("Move \(source) up")
+            .accessibilityLabel("Move \(source) up")
+
+            Button {
+                model.moveSource(source, by: 1, for: providerKey)
+            } label: {
+                Image(systemName: "arrow.down").font(.system(size: 10))
+            }
+            .buttonStyle(.borderless)
+            .disabled(index == total - 1)
+            .help("Move \(source) down")
+            .accessibilityLabel("Move \(source) down")
+        }
+        .padding(.leading, 4)
+    }
+
+    // Roster order helpers
+
+    private func moveProviderUp(_ providerKey: String) {
+        model.movePlatformUp(providerKey: providerKey)
+    }
+
+    private func moveProviderDown(_ providerKey: String) {
+        model.movePlatformDown(providerKey: providerKey)
+    }
+
+    /// Live reorder for the drag: move `dragged` onto `target` in the
+    /// roster and commit the whole order, so `platformOrder` always
+    /// describes what the roster shows.
+    private func moveProvider(_ dragged: String, onto target: String) {
+        var keys = rosterKeys
+        guard let from = keys.firstIndex(of: dragged),
+              let to = keys.firstIndex(of: target), from != to else { return }
+        keys.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        model.platformOrder = keys
+    }
+
+    private func moveSelected(by delta: Int) {
+        guard let selectedProviderKey else { return }
+        if delta < 0 { moveProviderUp(selectedProviderKey) }
+        else { moveProviderDown(selectedProviderKey) }
     }
 
     // MARK: This Mac
@@ -496,18 +790,10 @@ struct SettingsSourcesFleetPage: View {
                 }
             }
             .disabled(!model.localEnabled || !model.sessionFileChecksEnabled)
-            ForEach(ReaderStatus.current, id: \.providerKey) { reader in
-                readerRow(reader)
-                if reader.optionalReaderID == "zcode" { ZAIQuotaSettingsView(controller: model.zAIQuotaSetup) }
-                if reader.optionalReaderID == "alibaba-token-plan" { AlibabaTokenPlanHelpView() }
-                if reader.optionalReaderID == "mimo-token-plan" { MiMoQuotaSettings(model: model) }
-            }
         } header: {
             Eyebrow("THIS MAC")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Most plans use the sign-in already on this Mac." + sentenceGap
-                     + "Z.ai Coding Plan reads use your ZCode sign-in, or the regional API key you save here.")
                 Text("Plan checks use the sign-in already on this Mac." + sentenceGap
                      + "Copilot uses your existing GitHub sign-in.")
                 Text("Codex session checks read a file on this Mac." + sentenceGap
@@ -526,73 +812,15 @@ struct SettingsSourcesFleetPage: View {
         }
     }
 
-    private func readerRow(_ reader: ReaderStatus) -> some View {
-        let section = model.sections.first { $0.providerKey == reader.providerKey }
-        let issue = model.issues[reader.providerKey]
-        let optionalEnabled = reader.optionalReaderID.map(model.isOptionalQuotaReaderEnabled) ?? true
-        let healthy = optionalEnabled && issue == nil && !(section?.windows.isEmpty ?? true)
-        // A reader whose credential is on this Mac but unreadable by this
-        // build gets a button rather than a sentence it cannot act on.  Only
-        // Claude's row carries it:  an interactive sign-in failure from any
-        // other reader (Antigravity, for one) also lands in consentNeeded,
-        // and its fix is signing in to that provider, not granting macOS
-        // permission to read Claude Code's saved login (owner, 2026-11-27).
-        let needsConsent = model.consentNeeded.contains(reader.providerKey)
-            && (reader.providerKey == "anthropic" || reader.providerKey == "claude")
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                PlatformLogo(providerKey: reader.providerKey, size: 16,
-                             style: model.markStyle(for: reader.providerKey))
-                Text(section?.providerLabel ?? reader.label)
-                    .font(.subheadline.weight(.medium))
-                    .frame(width: 110, alignment: .leading)
-                Text(reader.source)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help(reader.optionalReaderID == "alibaba-token-plan" ? AlibabaTokenPlanHelp.tooltip : "")
-                Spacer(minLength: 8)
-                if let readerID = reader.optionalReaderID {
-                    Toggle("", isOn: Binding(
-                        get: { model.isOptionalQuotaReaderEnabled(readerID) },
-                        set: { model.setOptionalQuotaReaderEnabled($0, readerID: readerID) }))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .help(optionalEnabled ? "Turn Off \(reader.label) Quota Reads" : "Turn On \(reader.label) Quota Reads")
-                        .accessibilityLabel("Read \(reader.label) Quota")
-                } else {
-                    Image(systemName: healthy ? "checkmark.circle" : "exclamationmark.triangle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(healthy ? Theme.success : Theme.warning)
-                        .accessibilityHidden(true)
-                }
-            }
-            if !optionalEnabled {
-                Text("Quota reads are off for this provider.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if let issue {
-                Text(issue)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if !healthy && model.localEnabled {
-                Text("Not signed in locally.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if needsConsent { claudeConsentControls }
-        }
-        // A row carrying a button must stay navigable, so only the plain rows
-        // collapse into one element.
-        .accessibilityElement(children: needsConsent ? .contain : .combine)
-    }
-
     /// The consent step, shown only when macOS explicitly refuses the
     /// `security` read the refresh loop makes.  The button runs that same
-    /// `security` read without a short deadline, so the panel macOS shows, and
-    /// the Always Allow answered in it, apply to the program the loop reads as.
+    /// `security` read without a short deadline, so the panel macOS shows,
+    /// and the Always Allow answered in it, apply to the program the loop
+    /// reads as.  Only Claude's detail carries it:  an interactive sign-in
+    /// failure from any other reader (Antigravity, for one) also lands in
+    /// consentNeeded, and its fix is signing in to that provider, not
+    /// granting macOS permission to read Claude Code's saved login
+    /// (owner, 2026-11-27).
     @ViewBuilder
     private var claudeConsentControls: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -628,132 +856,6 @@ struct SettingsSourcesFleetPage: View {
         }
         .padding(.top, 2)
     }
-
-    // MARK: Source Ranking
-
-    /// Per-provider source enable + rank.  Sections only render for providers
-    /// that have more than one observed source — the Dashboard page should not
-    /// tease a control that has no effect.
-    @ViewBuilder
-    private var sourcesRankSection: some View {
-        let grouped: [(key: String, label: String, sources: [String])] = model.displaySections
-            .map(\.section.providerKey)
-            .reduce(into: [String]()) { acc, key in
-                let sources = model.availableSources(for: key)
-                guard sources.count > 1 else { return }
-                if !acc.contains(key) { acc.append(key) }
-            }
-            .map { key in
-                let label = model.sections.first { $0.providerKey == key }?.providerLabel ?? key
-                return (key: key, label: label, sources: model.availableSources(for: key))
-            }
-        if !grouped.isEmpty {
-            Section {
-                ForEach(grouped, id: \.key) { group in
-                    sourceGroup(for: group.key, label: group.label, sources: group.sources)
-                }
-            } header: {
-                Eyebrow("SOURCES PER PLATFORM")
-            } footer: {
-                Text("CodeCaps pulls each provider's quota from whichever sources can answer." + sentenceGap
-                     + "Turn a source off to drop its windows everywhere — the menu bar, Docked Bar, and Console all skip it." + sentenceGap
-                     + "Reorder to tell CodeCaps which source wins when two disagree; the top of the list is preferred, the bottom is the fallback.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func sourceGroup(for providerKey: String, label: String, sources: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                // This one shipped without a `style:`, so it drew the init's
-                // old default of `.template` and every mark here came out grey
-                // no matter what the Logo Style page had set.  The init no
-                // longer has a default for exactly this reason.
-                PlatformLogo(providerKey: providerKey, size: 16,
-                             style: model.markStyle(for: providerKey))
-                Text(label)
-                    .font(.subheadline.weight(.medium))
-                Spacer()
-                Text("\(sources.count) sources")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            ForEach(Array(sources.enumerated()), id: \.element) { index, source in
-                sourceRow(source: source,
-                          index: index,
-                          total: sources.count,
-                          providerKey: providerKey)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private func sourceRow(source: String, index: Int, total: Int, providerKey: String) -> some View {
-        let enabled = !model.disabledSources.contains(source)
-        HStack(spacing: 8) {
-            Toggle("", isOn: Binding(
-                get: { enabled },
-                set: { model.setSourceEnabled($0, source, for: providerKey) }))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .help(enabled ? "Hide windows from \(source)" : "Show windows from \(source)")
-                .accessibilityLabel(enabled ? "Hide windows from \(source)" : "Show windows from \(source)")
-
-            Text(source)
-                .font(.system(.callout, design: .monospaced))
-                .foregroundStyle(enabled ? Theme.ink : .secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Text("#\(index + 1)")
-                .font(.system(.caption, design: .monospaced).weight(.medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 24, alignment: .trailing)
-
-            Button {
-                model.moveSource(source, by: -1, for: providerKey)
-            } label: {
-                Image(systemName: "arrow.up").font(.system(size: 10))
-            }
-            .buttonStyle(.borderless)
-            .disabled(index == 0)
-            .help("Move \(source) up")
-            .accessibilityLabel("Move \(source) up")
-
-            Button {
-                model.moveSource(source, by: 1, for: providerKey)
-            } label: {
-                Image(systemName: "arrow.down").font(.system(size: 10))
-            }
-            .buttonStyle(.borderless)
-            .disabled(index == total - 1)
-            .help("Move \(source) down")
-            .accessibilityLabel("Move \(source) down")
-        }
-        .padding(.leading, 24)
-    }
-
-
-/// Shown under a group's header when a token is on file that this build cannot
-/// read.  Plain words, because the alternative the owner actually met was a
-/// pull that failed with nothing to act on.
-private struct ReauthorizeCaption: View {
-    var body: some View {
-        Text("This build cannot read the saved token yet." + sentenceGap
-             + "Re-authorize it, or paste the token again.")
-            .font(.caption)
-            .foregroundStyle(Theme.warning)
-            .textCase(nil)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
 
     // MARK: Share This Mac
 
@@ -888,7 +990,7 @@ private struct ReauthorizeCaption: View {
         }
     }
 
-    // MARK: Pull The Fleet
+    // MARK: Other Devices
 
     private var pullSection: some View {
         Section {
@@ -965,26 +1067,26 @@ private struct ReauthorizeCaption: View {
             }
         } header: {
             VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Eyebrow("OTHER DEVICES")
-                Spacer()
-                if let dashboardURL {
-                    Button {
-                        NSWorkspace.shared.open(dashboardURL)
-                    } label: {
-                        Label("Open Web Dashboard", systemImage: "arrow.up.right.square")
+                HStack {
+                    Eyebrow("OTHER DEVICES")
+                    Spacer()
+                    if let dashboardURL {
+                        Button {
+                            NSWorkspace.shared.open(dashboardURL)
+                        } label: {
+                            Label("Open Web Dashboard", systemImage: "arrow.up.right.square")
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .textCase(nil)
+                        .help("Open Web Dashboard")
+                        .accessibilityLabel("Open Web Dashboard")
                     }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                    .textCase(nil)
-                    .help("Open Web Dashboard")
-                    .accessibilityLabel("Open Web Dashboard")
+                    Text(model.lastPullTime.map { "Pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pulled")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textCase(nil)
                 }
-                Text(model.lastPullTime.map { "Pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pulled")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textCase(nil)
-            }
                 if model.readTokenState.needsReauthorization {
                     ReauthorizeCaption()
                 }
@@ -1023,7 +1125,48 @@ private struct ReauthorizeCaption: View {
             }
         }
     }
+
+    // MARK: Setup Guide
+
+    /// Reference material, so it sits at the foot:  the page leads with its
+    /// namesake content and owners who need the guide will find it either way.
+    private var setupGuideSection: some View {
+        Section {
+            Link("Setup & Data Guide", destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!)
+            Text("Turn on this Mac, sharing, and other devices separately.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Eyebrow("SETUP & DATA GUIDE")
+        }
+    }
 }
+
+/// Live reflow for the roster drag, on the `PipOptionsReorderList` pattern:
+/// onDrag/onDrop with a drop delegate, which works inside a grouped Form
+/// where `List.onMove`'s drop indicator does not.
+private struct ProviderRosterDropDelegate: DropDelegate {
+    let targetKey: String
+    @Binding var draggedKey: String?
+    let onMove: (String, String) -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let dragged = draggedKey, dragged != targetKey else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            onMove(dragged, targetKey)
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedKey = nil
+        return true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+}
+
 
 /// Local quota readers, named by the credential they actually read.
 struct ReaderStatus {

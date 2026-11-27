@@ -10,7 +10,6 @@ enum ConsolePage: Hashable {
     case runawayAlerts
     case plugin(String)
     case settingsMenuBar
-    case settingsPlatforms
     case settingsLogoStyle
     case settingsSourcesFleet
     case settingsNotifications
@@ -32,7 +31,6 @@ enum ConsolePage: Hashable {
         case .runawayAlerts: return "runawayAlerts"
         case .plugin(let pluginId): return "plugin:" + pluginId
         case .settingsMenuBar: return "settingsMenuBar"
-        case .settingsPlatforms: return "settingsPlatforms"
         case .settingsLogoStyle: return "settingsLogoStyle"
         case .settingsSourcesFleet: return "settingsSourcesFleet"
         case .settingsNotifications: return "settingsNotifications"
@@ -47,7 +45,10 @@ enum ConsolePage: Hashable {
         case "allPlatforms": return .allPlatforms
         case "runawayAlerts": return .runawayAlerts
         case "settingsMenuBar": return .settingsMenuBar
-        case "settingsPlatforms": return .settingsPlatforms
+        // The old Platforms page merged into Platforms & Sources (owner,
+        // 2026-11-27): a saved selection under the old key lands on the
+        // merged page forever.
+        case "settingsPlatforms": return .settingsSourcesFleet
         case "settingsLogoStyle": return .settingsLogoStyle
         case "settingsSourcesFleet": return .settingsSourcesFleet
         case "settingsNotifications": return .settingsNotifications
@@ -70,9 +71,8 @@ enum ConsolePage: Hashable {
         case .runawayAlerts: return "Runaway Alerts"
         case .plugin(let pluginId): return CodeCapsPlugin.named(pluginId)?.title ?? "Plugin"
         case .settingsMenuBar: return "Menu Bar & PiP"
-        case .settingsPlatforms: return "Platforms"
         case .settingsLogoStyle: return "Logo Style"
-        case .settingsSourcesFleet: return "Sources & Fleet"
+        case .settingsSourcesFleet: return "Platforms & Sources"
         case .settingsNotifications: return "Alerts & Alarms"
         case .settingsAppearance: return "Appearance"
         case .settingsInfisical: return "Infisical Sync"
@@ -87,7 +87,6 @@ enum ConsolePage: Hashable {
         case .runawayAlerts: return "flame.fill"
         case .plugin(let pluginId): return CodeCapsPlugin.named(pluginId)?.symbol ?? "puzzlepiece.extension"
         case .settingsMenuBar: return "menubar.rectangle"
-        case .settingsPlatforms: return "square.grid.2x2"
         case .settingsLogoStyle: return "photo.on.rectangle.angled"
         case .settingsSourcesFleet: return "arrow.up.arrow.down.circle"
         case .settingsNotifications: return "bell.badge"
@@ -99,7 +98,7 @@ enum ConsolePage: Hashable {
     }
 
     static let settingsPages: [ConsolePage] = [
-        .settingsMenuBar, .settingsPlatforms, .settingsLogoStyle, .settingsSourcesFleet, .settingsNotifications, .settingsAppearance, .settingsInfisical, .settingsAbout,
+        .settingsMenuBar, .settingsLogoStyle, .settingsSourcesFleet, .settingsNotifications, .settingsAppearance, .settingsInfisical, .settingsAbout,
     ]
 
     static let pluginPages: [ConsolePage] = CodeCapsPlugin.allCases.map { .plugin($0.id) }
@@ -337,7 +336,7 @@ struct ConsoleView: View {
                     .accessibilityHidden(true)
             }
             if let unavailable = state.unavailableAlert {
-                Text("Alert source unavailable: \(unavailable.providerKey)\(unavailable.windowId.map { " · \($0)" } ?? "").\(sentenceGap)Check Sources & Fleet for this provider.")
+                Text("Alert source unavailable: \(unavailable.providerKey)\(unavailable.windowId.map { " · \($0)" } ?? "").\(sentenceGap)Check Platforms & Sources for this provider.")
                     .font(.callout)
                     .foregroundStyle(Theme.warning)
                     .padding(.horizontal, Metrics.pagePadding)
@@ -359,12 +358,10 @@ struct ConsoleView: View {
                         .padding(Metrics.pagePadding)
                 case .settingsMenuBar:
                     SettingsMenuBarPage(model: model)
-                case .settingsPlatforms:
-                    SettingsPlatformsPage(model: model)
                 case .settingsLogoStyle:
                     SettingsLogoStylePage(model: model)
                 case .settingsSourcesFleet:
-                    SettingsSourcesFleetPage(model: model)
+                    SettingsPlatformsAndSourcesPage(model: model)
                 case .settingsNotifications:
                     SettingsNotificationsPage(model: model, state: state)
                 case .settingsAppearance:

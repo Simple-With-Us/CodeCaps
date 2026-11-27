@@ -109,7 +109,7 @@ enum TokenStore {
             switch self {
             // The old wording named the problem and left the owner with
             // nothing to do about it.  This one points at the button.
-            case .read: return "The saved token is unavailable in Keychain.\u{00A0} Re-authorize it in Sources & Fleet, or paste it again."
+            case .read: return "The saved token is unavailable in Keychain.\u{00A0} Re-authorize it in Platforms & Sources, or paste it again."
             case let .write(status, service): return TokenStore.writeFailureMessage(status: status, service: service)
             }
         }

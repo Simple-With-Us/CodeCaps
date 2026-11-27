@@ -1,7 +1,25 @@
 {
   "images": [
     {
+      "filename": "light-icon-20.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "20x20"
+    },
+    {
       "filename": "icon-20.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "20x20",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-20@2x.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "20x20"
@@ -10,16 +28,52 @@
       "filename": "icon-20@2x.png",
       "idiom": "universal",
       "platform": "ios",
+      "size": "20x20",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-20@3x.png",
+      "idiom": "universal",
+      "platform": "ios",
       "size": "20x20"
     },
     {
       "filename": "icon-20@3x.png",
       "idiom": "universal",
       "platform": "ios",
-      "size": "20x20"
+      "size": "20x20",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-29.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "29x29"
     },
     {
       "filename": "icon-29.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "29x29",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-29@2x.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "29x29"
@@ -28,16 +82,52 @@
       "filename": "icon-29@2x.png",
       "idiom": "universal",
       "platform": "ios",
+      "size": "29x29",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-29@3x.png",
+      "idiom": "universal",
+      "platform": "ios",
       "size": "29x29"
     },
     {
       "filename": "icon-29@3x.png",
       "idiom": "universal",
       "platform": "ios",
-      "size": "29x29"
+      "size": "29x29",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-40.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "40x40"
     },
     {
       "filename": "icon-40.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "40x40",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-40@2x.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "40x40"
@@ -46,16 +136,52 @@
       "filename": "icon-40@2x.png",
       "idiom": "universal",
       "platform": "ios",
+      "size": "40x40",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-40@3x.png",
+      "idiom": "universal",
+      "platform": "ios",
       "size": "40x40"
     },
     {
       "filename": "icon-40@3x.png",
       "idiom": "universal",
       "platform": "ios",
-      "size": "40x40"
+      "size": "40x40",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-60@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "60x60"
     },
     {
       "filename": "icon-60@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "60x60",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-60@3x.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "60x60"
@@ -64,10 +190,34 @@
       "filename": "icon-60@3x.png",
       "idiom": "universal",
       "platform": "ios",
-      "size": "60x60"
+      "size": "60x60",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-76.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "76x76"
     },
     {
       "filename": "icon-76.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "76x76",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-76@2x.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "76x76"
@@ -76,19 +226,49 @@
       "filename": "icon-76@2x.png",
       "idiom": "universal",
       "platform": "ios",
-      "size": "76x76"
+      "size": "76x76",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
     },
     {
-      "filename": "icon-83.5@2x.png",
+      "filename": "light-icon-83.5@2x.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "83.5x83.5"
     },
     {
-      "filename": "icon-1024.png",
+      "filename": "icon-83.5@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "83.5x83.5",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "light-icon-1024.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "1024x1024"
+    },
+    {
+      "filename": "icon-1024.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "1024x1024",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
     },
     {
       "filename": "mac-16.png",

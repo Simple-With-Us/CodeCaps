@@ -2516,7 +2516,7 @@ struct GlanceRow: View {
 
 /// Shown below the platform list when a reader's saved login is present on
 /// this Mac but unreadable until the owner allows this build once.  The button
-/// deep-links to Sources & Fleet, where the one-time step lives.
+/// deep-links to Platforms & Sources, where the one-time step lives.
 struct ConsentRow: View {
     let message: String
     var action: () -> Void
