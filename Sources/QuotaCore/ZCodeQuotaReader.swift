@@ -670,7 +670,7 @@ private struct ExplicitZCodeQuotaReader: Sendable {
         do {
             try Task.checkCancellation()
             guard let credential = await credential(), credential.isValid else {
-                return LocalQuotaResult(issues: ["zcode": "Z.ai quota setup is needed.\u{00A0} Save a Coding Plan API key in Sources & Fleet."])
+                return LocalQuotaResult(issues: ["zcode": "Z.ai quota setup is needed.\u{00A0} Save a Coding Plan API key in Platforms & Sources."])
             }
             try Task.checkCancellation()
             let result = try await Self.fetchQuota(url: credential.region.quotaURL, token: credential.apiKey, fetch: fetch)

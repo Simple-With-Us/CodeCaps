@@ -496,6 +496,12 @@ public enum CompanionProviderMarkAssets {
         if low.contains("muse") { return "provider-muse-assist" }
         if low.contains("antigravity") { return "provider-antigravity" }
         if low.contains("gemini") { return "provider-gemini" }
+        // Alibaba's two plans share the one brand mark; MiMo and OpenCode Go
+        // carry their own.  Checked after the established keys so an
+        // overlapping substring cannot steal a row.
+        if low.contains("alibaba") || low.contains("qwen") { return "provider-alibaba" }
+        if low.contains("mimo") { return "provider-mimo" }
+        if low.contains("opencode") { return "provider-opencode-go" }
 
         switch CompanionProviderRouting.canonicalKey(provider: providerKey, providerKey: providerKey, via: nil) {
         case "grok-bot": return "provider-grok-bot"

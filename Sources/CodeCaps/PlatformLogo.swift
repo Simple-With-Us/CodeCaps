@@ -358,6 +358,13 @@ private static let resourceNames: [String: String] = [
     "cursor": "cursor",
     "github-copilot": "copilot",
     "copilot": "copilot",
+    // Alibaba's two plans share the one brand mark; the provider keys stay
+    // the stable quota-reader ids (owner, 2026-11-27: "Alibaba logo
+    // probably").
+    "alibaba-token-plan": "alibaba",
+    "alibaba-coding-plan": "alibaba",
+    "mimo-token-plan": "mimo",
+    "opencode-go": "opencode-go",
 ]
 
 /// The file a style and appearance ask for, or `nil` when the mark is absent.
@@ -591,6 +598,17 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// "artwork is there and the bundle could not open it".
     private static var lastFailure: String? = nil
 
+    /// Consecutive mapped-mark probes that found no candidate file at all
+    /// while a bundle was pinned.  Three in a row trip the watchdog that
+    /// drops the pin (see `bundledImage`).  Reset by any successful decode.
+    private static var mappedMissStreak = 0
+    /// When the watchdog last dropped the bundle pin, in reference-date
+    /// seconds.  The cooldown keeps a genuinely broken install from
+    /// dropping and re-resolving in a hot loop.
+    private static var lastBundleDrop: TimeInterval = 0
+    /// Minimum seconds between watchdog bundle drops.
+    private static let bundleDropCooldown: TimeInterval = 30
+
     private static func noteFailure(_ reason: String) {
         stateLock.lock()
         guard lastFailure != reason else { stateLock.unlock(); return }
@@ -659,22 +677,64 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
                 filenames.append(filename)
             }
         }
+        var sawAnyFile = false
         for filename in filenames {
-            if let image = imageFromBundle(filename: filename, key: identity.key, cacheKey: identity.cacheKey, cache: identity.cache, refreshing: refreshing) {
+            let (image, sawFile) = imageFromBundle(filename: filename, key: identity.key, cacheKey: identity.cacheKey, cache: identity.cache, refreshing: refreshing)
+            sawAnyFile = sawAnyFile || sawFile
+            if let image {
                 // A decode is what makes every surface drop the placeholder,
                 // including a row whose own task is still inside its backoff.
+                stateLock.lock()
+                mappedMissStreak = 0
+                stateLock.unlock()
                 publishMarksResolved()
                 return image
             }
         }
+        var droppedPin = false
+        var droppedPinFilename: String?
         stateLock.lock()
         // No bundle yet: the failure is environmental.  Storing it would
         // make the next draw, and the launch preload, keep returning nil
         // after the bundle is there.
         if cachedBundle != nil && !bundleUnavailableForTesting {
             missingBundledKeys[cacheKeyString] = catalogEpoch
+            // Watchdog:  a MAPPED mark with NO candidate file anywhere says
+            // the pinned bundle cannot deliver, not that the artwork is
+            // absent — a stale copy that won the search order, or a bundle
+            // directory caught half-copied by an update.  The pin used to
+            // hold for the life of the process.  Three such misses drop it
+            // once per cooldown so re-resolution (and the shadow-bundle
+            // sweep in the candidate list) can land on a good copy, and one
+            // notification wakes every open placeholder row (owner,
+            // 2026-11-27).  Two gates keep the watchdog honest (Seer and
+            // Kody findings, 2026-11-27):  files that exist but fail to
+            // decode (`sawAnyFile`) are an artwork problem, not a bundle
+            // problem, and keys with no catalog mapping (endpoint plugins,
+            // unknown keys) have no files to find by construction — either
+            // incrementing here would drop a healthy bundle on a loop.
+            if !sawAnyFile, mappedBase != nil {
+                mappedMissStreak += 1
+                let now = Date().timeIntervalSinceReferenceDate
+                if mappedMissStreak >= 3, now - lastBundleDrop >= bundleDropCooldown {
+                    lastBundleDrop = now
+                    mappedMissStreak = 0
+                    bundleGeneration &+= 1
+                    cachedBundle = nil
+                    candidateURLCache.removeAll()
+                    missingBundledKeys.removeAll()
+                    droppedPinFilename = filenames.first ?? "a mapped mark"
+                    droppedPin = true
+                }
+            }
         }
         stateLock.unlock()
+        // The log and the wake both take the lock themselves, so they wait
+        // until the pin work above has released it.
+        if let droppedPinFilename {
+            noteFailure("the pinned resource bundle delivered no files for '\(droppedPinFilename)'; dropped the pin so it re-resolves")
+        }
+        if droppedPin { publishMarksResolved() }
         return nil
     }
     /// A missing appearance variant should not hide a usable brand mark.
@@ -687,7 +747,11 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         return names
     }
 
-    private static func imageFromBundle(filename: String, key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, refreshing: Bool) -> NSImage? {
+    /// Decodes `filename` from the first candidate that yields pixels, and
+    /// reports whether ANY candidate file existed on disk.  `sawFile == false`
+    /// for a mapped mark is the signature of a bundle that cannot deliver,
+    /// which is what the watchdog below acts on.
+    private static func imageFromBundle(filename: String, key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, refreshing: Bool) -> (image: NSImage?, sawFile: Bool) {
         // Walk EVERY candidate, decoding as we go, and take the first that
         // yields pixels.
         //
@@ -701,17 +765,19 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         bundledCandidateProbes += 1
         stateLock.unlock()
         let urls = candidateURLs(filename: filename, refreshing: refreshing)
+        var sawFile = false
         for candidate in urls {
             guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
+            sawFile = true
             guard let image = NSImage(contentsOf: candidate) ?? NSImage(contentsOfFile: candidate.path) else {
                 noteFailure("'\(filename)' exists at \(candidate.path) but would not decode; trying the next location")
                 continue
             }
-            return finalize(image: image, url: candidate, key: key,
-                            cacheKey: cacheKey, cache: cache)
+            return (finalize(image: image, url: candidate, key: key,
+                             cacheKey: cacheKey, cache: cache), true)
         }
         noteFailure("'\(filename)' is mapped for '\(key as String)' but was not found in any of the \(urls.count) known locations")
-        return nil
+        return (nil, sawFile)
     }
 
     /// Every place the mark could legitimately live, across both the resolved
@@ -742,18 +808,22 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         return urls
     }
 
+    /// The five places a mark can sit inside one bundle, in probe order.
+    private static func appendBundleCandidates(_ bundle: Bundle, filename: String, to urls: inout [URL]) {
+        let name = (filename as NSString).deletingPathExtension
+        let ext = (filename as NSString).pathExtension
+        if let u = bundle.url(forResource: name, withExtension: ext) { urls.append(u) }
+        if let u = bundle.url(forResource: name, withExtension: ext, subdirectory: "ProviderMarks") { urls.append(u) }
+        if let base = bundle.resourceURL { urls.append(fileURL(appending: filename, to: base)) }
+        urls.append(fileURL(appending: "Contents/Resources/\(filename)", to: bundle.bundleURL))
+        urls.append(fileURL(appending: filename, to: bundle.bundleURL))
+    }
+
     private static func makeCandidateURLs(filename: String) -> [URL] {
         var urls: [URL] = []
         let bundled = directoryURL(appending: "Contents/Resources/CodeCaps_CodeCaps.bundle", to: Bundle.main.bundleURL)
-        let bundles = [currentBundle(), Bundle(url: bundled)]
-        for bundle in bundles.compactMap({ $0 }) {
-            let name = (filename as NSString).deletingPathExtension
-            let ext = (filename as NSString).pathExtension
-            if let u = bundle.url(forResource: name, withExtension: ext) { urls.append(u) }
-            if let u = bundle.url(forResource: name, withExtension: ext, subdirectory: "ProviderMarks") { urls.append(u) }
-            if let base = bundle.resourceURL { urls.append(fileURL(appending: filename, to: base)) }
-            urls.append(fileURL(appending: "Contents/Resources/\(filename)", to: bundle.bundleURL))
-            urls.append(fileURL(appending: filename, to: bundle.bundleURL))
+        for bundle in [currentBundle(), Bundle(url: bundled)].compactMap({ $0 }) {
+            appendBundleCandidates(bundle, filename: filename, to: &urls)
         }
         if let res = Bundle.main.resourceURL {
             urls.append(fileURL(appending: "CodeCaps_CodeCaps.bundle/Contents/Resources/\(filename)", to: res))
@@ -764,6 +834,20 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         urls.append(fileURL(appending: "Contents/Resources/CodeCaps_CodeCaps.bundle/Contents/Resources/\(filename)", to: main))
         urls.append(fileURL(appending: "Contents/Resources/CodeCaps_CodeCaps.bundle/\(filename)", to: main))
         urls.append(fileURL(appending: "Contents/Resources/\(filename)", to: main))
+
+        // Shadow-bundle sweep.  A stale or half-copied resource bundle earlier
+        // in the search order used to win the pin for the life of the process,
+        // and every mark that copy lacked drew the placeholder — a different
+        // subset on different launches, which is exactly the owner's report
+        // (2026-11-27, "which ones don't load changes all the time").  The
+        // pinned bundle and the app's own bundle keep priority; these are the
+        // same roots `resolveBundle` walks, asked only for the filenames the
+        // front of the order could not deliver.
+        for root in ResourceBundle.searchRoots {
+            let candidate = root.appendingPathComponent("\(ResourceBundle.name).bundle", isDirectory: true)
+            guard let bundle = Bundle(url: candidate) else { continue }
+            appendBundleCandidates(bundle, filename: filename, to: &urls)
+        }
 
         // De-duplicate while preserving order, so the common case (the first
         // candidate hits) does the least work.
@@ -1416,7 +1500,11 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// first draw should not leave placeholder glyphs lingering), then five
     /// seconds for the install/update window, then once a minute so a mark
     /// that appears later — a custom import, a late-mounted bundle — still
-    /// heals without a relaunch.
+    /// heals without a relaunch.  The tail stays at a minute on purpose
+    /// (Kody finding, 2026-11-27):  a healed bundle announces itself with a
+    /// decode, which publishes the marks-resolved wave and wakes every open
+    /// placeholder immediately, so a faster tail would only multiply the
+    /// candidate sweep's filesystem probes during an outage.
     public static func missingMarkRetryDelay(forAttempt attempt: Int) -> UInt64 {
         if attempt < 3 { return 1_000_000_000 }
         return attempt < 12 ? 5_000_000_000 : 60_000_000_000

@@ -14,7 +14,6 @@ final class ConsoleNavigationTests: XCTestCase {
             .platform("anthropic"),
             .runawayAlerts,
             .settingsMenuBar,
-            .settingsPlatforms,
             .settingsLogoStyle,
             .settingsSourcesFleet,
             .settingsNotifications,
@@ -27,6 +26,14 @@ final class ConsoleNavigationTests: XCTestCase {
             let restored = ConsolePage.fromStorageKey(key)
             XCTAssertEqual(restored, page, "ConsolePage \(page) should round-trip through storageKey")
         }
+    }
+
+    /// The old Platforms page merged into Platforms & Sources (owner,
+    /// 2026-11-27): the case is gone, but a saved selection under the old
+    /// storage key must land on the merged page, not nil.
+    func testLegacyPlatformsKeyLandsOnTheMergedPage() {
+        XCTAssertEqual(ConsolePage.fromStorageKey("settingsPlatforms"), .settingsSourcesFleet)
+        XCTAssertEqual(ConsolePage.settingsSourcesFleet.settingsTitle, "Platforms & Sources")
     }
 
     func testConsolePageIsSettings() {
