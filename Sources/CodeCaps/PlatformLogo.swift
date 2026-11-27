@@ -692,6 +692,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             }
         }
         var droppedPin = false
+        var droppedPinFilename: String?
         stateLock.lock()
         // No bundle yet: the failure is environmental.  Storing it would
         // make the next draw, and the launch preload, keep returning nil
@@ -716,11 +717,16 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
                 cachedBundle = nil
                 candidateURLCache.removeAll()
                 missingBundledKeys.removeAll()
-                noteFailure("the pinned resource bundle delivered no files for '\(filenames.first ?? "a mapped mark")'; dropped the pin so it re-resolves")
+                droppedPinFilename = filenames.first ?? "a mapped mark"
                 droppedPin = true
             }
         }
         stateLock.unlock()
+        // The log and the wake both take the lock themselves, so they wait
+        // until the pin work above has released it.
+        if let droppedPinFilename {
+            noteFailure("the pinned resource bundle delivered no files for '\(droppedPinFilename)'; dropped the pin so it re-resolves")
+        }
         if droppedPin { publishMarksResolved() }
         return nil
     }

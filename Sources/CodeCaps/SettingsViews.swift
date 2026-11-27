@@ -551,15 +551,13 @@ struct SettingsPlatformsAndSourcesPage: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("\(label), position \(position) of \(total)")
-            .accessibilityCustomActions {
-                [
-                    AccessibilityCustomAction("Move Up") { _ in moveProviderUp(providerKey); return true },
-                    AccessibilityCustomAction("Move Down") { _ in moveProviderDown(providerKey); return true },
-                    AccessibilityCustomAction(expanded ? "Hide Detail" : "Show Detail") { _ in
-                        toggleDetail(providerKey, expanded: expanded)
-                        return true
-                    },
-                ]
+            // The named actions are VoiceOver's equivalent of the drag and
+            // the context menu — the old page's visible arrow buttons, kept
+            // operable without a pointer.
+            .accessibilityAction(named: Text("Move Up")) { moveProviderUp(providerKey) }
+            .accessibilityAction(named: Text("Move Down")) { moveProviderDown(providerKey) }
+            .accessibilityAction(named: Text(expanded ? "Hide Detail" : "Show Detail")) {
+                toggleDetail(providerKey, expanded: expanded)
             }
             if expanded, hasDetail(providerKey) {
                 providerDetail(providerKey, reader: reader)
@@ -1139,6 +1137,20 @@ struct SettingsPlatformsAndSourcesPage: View {
         } header: {
             Eyebrow("SETUP & DATA GUIDE")
         }
+    }
+}
+
+/// Shown under a group's header when a token is on file that this build cannot
+/// read.  Plain words, because the alternative the owner actually met was a
+/// pull that failed with nothing to act on.
+private struct ReauthorizeCaption: View {
+    var body: some View {
+        Text("This build cannot read the saved token yet." + sentenceGap
+             + "Re-authorize it, or paste the token again.")
+            .font(.caption)
+            .foregroundStyle(Theme.warning)
+            .textCase(nil)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
