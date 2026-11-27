@@ -10,9 +10,14 @@ final class AlibabaTokenPlanHelpTests: XCTestCase {
                        "https://www.alibabacloud.com/help/en/model-studio/cli/usage-quota")
     }
 
+    func testAuthLinkIsTheOfficialConfigPage() {
+        XCTAssertEqual(AlibabaTokenPlanHelp.authURL.absoluteString, "https://help.aliyun.com/en/model-studio/cli/config")
+        XCTAssertTrue(AlibabaTokenPlanHelp.openAPICommand.hasPrefix("bl auth login --open-api"))
+    }
+
     func testCommandsUsePlaceholdersNeverKeyValues() {
         let all = [AlibabaTokenPlanHelp.planKeyCommand, AlibabaTokenPlanHelp.consoleCommand,
-                   AlibabaTokenPlanHelp.checkCommand, AlibabaTokenPlanHelp.tooltip]
+                   AlibabaTokenPlanHelp.openAPICommand, AlibabaTokenPlanHelp.checkCommand, AlibabaTokenPlanHelp.tooltip]
             + AlibabaTokenPlanHelp.steps
         for text in all {
             XCTAssertFalse(text.contains("sk-"), text)

@@ -6,10 +6,11 @@ import SwiftUI
 enum AlibabaTokenPlanHelp {
     static let installURL = URL(string: "https://www.alibabacloud.com/help/en/model-studio/cli/installation")!
     static let usageURL = URL(string: "https://www.alibabacloud.com/help/en/model-studio/cli/usage-quota")!
+    static let authURL = URL(string: "https://help.aliyun.com/en/model-studio/cli/config")!
 
     static let planKeyCommand = "bl auth login --config token-plan --api-key <plan key> --base-url https://token-plan.ap-southeast-1.maas.aliyuncs.com"
     static let consoleCommand = "bl auth login --console --config token-plan --console-site international"
-    static let consoleFallback = "--no-browser"
+    static let openAPICommand = "bl auth login --open-api --access-key-id <AccessKey ID> --access-key-secret <AccessKey secret>"
     static let checkCommand = "bl usage token-plan --output json"
 
     static let tooltip = "Needs the Bailian CLI (bl) signed in two ways: your Token Plan key, and a console sign-in or AccessKey for usage."
@@ -17,7 +18,7 @@ enum AlibabaTokenPlanHelp {
     static let steps: [String] = [
         "Install the Bailian CLI (bl).",
         "Sign in with your Token Plan key (international endpoint shown; use the endpoint for the region you subscribed in):",
-        "Usage needs its own sign-in. Either sign in to the console (add --no-browser to print the login link), or use an Alibaba Cloud AccessKey ID and secret from the RAM console in BAILIAN_ACCESS_KEY_ID and BAILIAN_ACCESS_KEY_SECRET:",
+        "Usage needs its own sign-in. Either sign in to the console (add --no-browser to print the login link), or store an Alibaba Cloud AccessKey ID and secret from the RAM console (BAILIAN_ACCESS_KEY_ID and BAILIAN_ACCESS_KEY_SECRET also work):",
         "Check it works. CodeCaps runs only this command:",
     ]
 }
@@ -32,6 +33,9 @@ struct AlibabaTokenPlanHelpView: View {
                 command(AlibabaTokenPlanHelp.planKeyCommand)
                 Text(AlibabaTokenPlanHelp.steps[2])
                 command(AlibabaTokenPlanHelp.consoleCommand)
+                Text("or")
+                command(AlibabaTokenPlanHelp.openAPICommand)
+                Link("Sign-in options (bl auth login)", destination: AlibabaTokenPlanHelp.authURL)
                 Text(AlibabaTokenPlanHelp.steps[3])
                 command(AlibabaTokenPlanHelp.checkCommand)
                 Link("Usage and quota commands", destination: AlibabaTokenPlanHelp.usageURL)
