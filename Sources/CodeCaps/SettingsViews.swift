@@ -483,6 +483,7 @@ struct SettingsSourcesFleetPage: View {
             ForEach(ReaderStatus.current, id: \.providerKey) { reader in
                 readerRow(reader)
                 if reader.optionalReaderID == "zcode" { ZAIQuotaSettingsView(controller: model.zAIQuotaSetup) }
+                if reader.optionalReaderID == "alibaba-token-plan" { AlibabaTokenPlanHelpView() }
                 if reader.optionalReaderID == "mimo-token-plan" { MiMoQuotaSettings(model: model) }
             }
         } header: {
@@ -527,6 +528,7 @@ struct SettingsSourcesFleetPage: View {
                 Text(reader.source)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .help(reader.optionalReaderID == "alibaba-token-plan" ? AlibabaTokenPlanHelp.tooltip : "")
                 Spacer(minLength: 8)
                 if let readerID = reader.optionalReaderID {
                     Toggle("", isOn: Binding(
