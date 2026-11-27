@@ -730,21 +730,47 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                                disabledSources: Set<String> = [],
                                peerRows: [DisplaySection] = []) -> [QuotaWindowSnapshot] {
         let windows = currentWindows(for: row, now: now, issue: issue, disabledSources: disabledSources, peerRows: peerRows)
-        let minPercent = windows.compactMap(\.remainingPercent).min()
-        let current = DisplaySection(id: row.id, providerKey: row.providerKey, title: row.title,
-            platformTitle: row.platformTitle,
-            section: QuotaPlatformSection(providerKey: row.providerKey, providerLabel: row.section.providerLabel,
-                via: row.section.via, expected: row.section.expected, windows: windows, iconHint: row.section.iconHint),
-            poolKey: row.poolKey, remainingPercent: minPercent,
-            resetAt: nil, maskedWindowIds: row.maskedWindowIds,
-            drivingWindowId: minPercent.flatMap({ mp in windows.first(where: { $0.remainingPercent == mp })?.window.id }))
-        let meters = glanceMeterPair(for: current, now: now)
-        var out: [QuotaWindowSnapshot] = []
-        if let short = meters.short { out.append(short) }
-        if let long = meters.long, long.window.id != meters.short?.window.id {
-            out.append(long)
-        } else if meters.short == nil, let primary = windows.first {
-            out.append(primary)
+        // One pairing helper for both window sets, so the narrow and wide
+        // answers can never disagree about how a pair is picked.
+        func pair(for ws: [QuotaWindowSnapshot]) -> [QuotaWindowSnapshot] {
+            let minPercent = ws.compactMap(\.remainingPercent).min()
+            let current = DisplaySection(id: row.id, providerKey: row.providerKey, title: row.title,
+                platformTitle: row.platformTitle,
+                section: QuotaPlatformSection(providerKey: row.providerKey, providerLabel: row.section.providerLabel,
+                    via: row.section.via, expected: row.section.expected, windows: ws, iconHint: row.section.iconHint),
+                poolKey: row.poolKey, remainingPercent: minPercent,
+                resetAt: nil, maskedWindowIds: row.maskedWindowIds,
+                drivingWindowId: minPercent.flatMap({ mp in ws.first(where: { $0.remainingPercent == mp })?.window.id }))
+            let meters = glanceMeterPair(for: current, now: now)
+            var out: [QuotaWindowSnapshot] = []
+            if let short = meters.short { out.append(short) }
+            if let long = meters.long, long.window.id != meters.short?.window.id {
+                out.append(long)
+            } else if meters.short == nil, let primary = ws.first {
+                out.append(primary)
+            }
+            return out
+        }
+        var out = pair(for: windows)
+        // The dropdown pairs its meters over every drawable window, including
+        // one whose period has ended — it draws as a full bar with a "due"
+        // countdown.  `currentWindows` drops that awaiting-refresh window
+        // before the pairing sees it, so a pool with a due 5h and a live 7d
+        // showed only the 7d in the HUD while the dropdown showed both
+        // (owner, 2026-11-27, Antigravity Third-Party).  When the narrow set
+        // came up short, re-pair over the same drawable set the dropdown
+        // uses (supplementary, masked, and disabled sources still excluded,
+        // so the HUD never draws a window its surfaces turned off).  A
+        // failed row keeps its status words instead of meters.
+        if out.count < 2, issue == nil {
+            let drawable = row.section.windows
+                .filter {
+                    !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+                        && !disabledSources.contains($0.window.source ?? "")
+                }
+                .map { QuotaWindowSnapshot(window: $0.window, now: now) }
+            let wide = pair(for: drawable)
+            if wide.count > out.count { out = wide }
         }
         return out
     }
@@ -875,11 +901,13 @@ struct PipWidgetView: View {
     /// site is how a light HUD ends up with white text or a dark mark on white.
     private var background: PipBackground { model.pipBackground }
 
-    /// The mark style a provider's logo takes on this background.  Same logos as
-    /// the popover (the owner asked for that on 2026-10-10), then adapted to the
-    /// fill so they read on it.
-    private func markStyle(for row: DisplaySection) -> MarkStyle {
-        background.markStyle(for: model.glanceMarkStyle(for: row.id))
+    /// The mark presentation the owner's PiP logo choice asks for on this
+    /// background.  The old rule — always the background-adapted silhouette,
+    /// always monochrome-forced — is the Automatic default; Brand Color and
+    /// Light/Dark override it (owner, 2026-11-27: "it should be an option in
+    /// settings to use which logo for PiP").
+    private func logoPresentation(for row: DisplaySection) -> (style: MarkStyle, forceMonochrome: Bool) {
+        model.pipLogoStyle.presentation(on: background, ownerStyle: model.glanceMarkStyle(for: row.id))
     }
 
     /// The one row the detail view is showing, or nil.
@@ -1147,11 +1175,12 @@ struct PipWidgetView: View {
 
         return HStack(spacing: PipMetrics.rowSpacing) {
             if detail.showsProviderLogo {
+                let logo = logoPresentation(for: row)
                 PlatformLogo(providerKey: row.id,
                              size: PipMetrics.providerLogoSize,
-                             style: markStyle(for: row),
+                             style: logo.style,
                              iconHint: row.poolKey == nil ? row.section.iconHint : nil,
-                             forceMonochrome: true)
+                             forceMonochrome: logo.forceMonochrome)
                 // Owner 2026-10-10: "after the platform name (or logo if no
                 // name shown) there should be a little flame for usage spike".
                 // Beside the LOGO rather than after the name, because the name
@@ -1270,11 +1299,12 @@ struct PipWidgetView: View {
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
+                    let logo = logoPresentation(for: row)
                     PlatformLogo(providerKey: row.id,
                                  size: 16,
-                                 style: markStyle(for: row),
+                                 style: logo.style,
                                  iconHint: row.poolKey == nil ? row.section.iconHint : nil,
-                                 forceMonochrome: true)
+                                 forceMonochrome: logo.forceMonochrome)
                     Text(row.title)
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(background.ink)

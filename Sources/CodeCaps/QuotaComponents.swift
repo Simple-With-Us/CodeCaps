@@ -176,6 +176,50 @@ enum PipBackground: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which artwork the PiP HUD draws beside each provider.  Automatic keeps the
+/// shipped behaviour — the logo follows the background (silhouette on a dark
+/// HUD, brand-colour mark on a white one) and stays monochrome either way.
+/// The two explicit choices exist because the owner asked to be able to pick
+/// which logo the PiP uses (2026-11-27).
+enum PipLogoStyle: String, CaseIterable, Identifiable {
+    case automatic
+    case brandColor
+    case lightDark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .brandColor: return "Brand Color"
+        case .lightDark: return "Light/Dark"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .automatic: return "Follows the PiP background: silhouettes on a dark HUD, brand-colour marks on a white one."
+        case .brandColor: return "Always the full-colour mark, whatever the background."
+        case .lightDark: return "Always the light/dark silhouette, adapting to the background."
+        }
+    }
+
+    /// The mark style and monochrome forcing this choice asks for on the
+    /// given background.  A provider whose owner picked a custom mark keeps
+    /// it in every style; only the monochrome forcing changes, so a custom
+    /// logo can still be asked to read as a silhouette.
+    func presentation(on background: PipBackground, ownerStyle: MarkStyle) -> (style: MarkStyle, forceMonochrome: Bool) {
+        if ownerStyle == .custom {
+            return (.custom, self == .lightDark)
+        }
+        switch self {
+        case .automatic: return (background.markStyle(for: ownerStyle), true)
+        case .brandColor: return (.standard, false)
+        case .lightDark: return (.template, true)
+        }
+    }
+}
+
 enum Theme {
     /// Pure black on light, pure white on dark, when high contrast is on.
     private static var highContrastInk: Color {

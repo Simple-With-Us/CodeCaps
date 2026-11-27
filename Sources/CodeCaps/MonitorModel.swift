@@ -855,6 +855,7 @@ final class MonitorModel: ObservableObject {
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
         glanceLogosFollowAccent = defaults.bool(forKey: "glanceLogosFollowAccent")
         pipBackground = PipBackground(rawValue: defaults.string(forKey: "pipBackground") ?? "") ?? .black
+        pipLogoStyle = PipLogoStyle(rawValue: defaults.string(forKey: "pipLogoStyle") ?? "") ?? .automatic
         pipShowProviderNames = defaults.bool(forKey: "pipShowProviderNames")
         providerChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.providerEnabled, defaults: defaults)
         sessionFileChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.sessionEnabled, defaults: defaults)
@@ -2035,6 +2036,18 @@ final class MonitorModel: ObservableObject {
     @Published var pipShowProviderNames: Bool {
         didSet {
             defaults.set(pipShowProviderNames, forKey: "pipShowProviderNames")
+            if presentsPipWindows { PipWidgetController.shared.update(model: self) }
+        }
+    }
+
+    /// Which artwork the PiP HUD draws beside each provider.  Automatic — the
+    /// shipped default — keeps silhouettes on a dark HUD and brand-colour
+    /// marks on a white one; the explicit choices override that because the
+    /// owner asked to choose which logo the PiP uses (2026-11-27).  A per-user
+    /// display preference, like the PiP background.
+    @Published var pipLogoStyle: PipLogoStyle {
+        didSet {
+            defaults.set(pipLogoStyle.rawValue, forKey: "pipLogoStyle")
             if presentsPipWindows { PipWidgetController.shared.update(model: self) }
         }
     }

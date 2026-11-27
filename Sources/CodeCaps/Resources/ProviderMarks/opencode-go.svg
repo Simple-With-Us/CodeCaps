@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- CodeCaps-drawn OpenCode Go mark: a charcoal rounded square with a teal
+       terminal prompt (chevron and underscore).  The bundled PNGs are
+       canonical; this is the vector source they were drawn from. -->
+  <rect x="48" y="48" width="160" height="160" rx="35" fill="#1F2430" />
+  <path d="M 92.5 102.75 L 134.5 128 L 92.5 158.25" fill="none" stroke="#2DD4BF" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" />
+  <rect x="142.5" y="138" width="32" height="18.75" rx="9.375" fill="#2DD4BF" />
+</svg>

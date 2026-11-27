@@ -159,6 +159,22 @@ struct SettingsMenuBarPage: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
+                        // Owner 2026-11-27: choose which logo the PiP draws.
+                        // Automatic keeps the shipped background-following
+                        // behaviour; the other two pin it.
+                        Picker("PiP Logos", selection: $model.pipLogoStyle) {
+                            ForEach(PipLogoStyle.allCases) { choice in
+                                Text(choice.title).tag(choice)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .help(model.pipLogoStyle.detail)
+                        .accessibilityLabel("PiP logos")
+
+                        Text(model.pipLogoStyle.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
                         // Owner 2026-10-28: the name is the first thing the
                         // width ladder drops, and the room it takes is worth
                         // more to the meters.  Off by default.
@@ -516,8 +532,13 @@ struct SettingsSourcesFleetPage: View {
         let optionalEnabled = reader.optionalReaderID.map(model.isOptionalQuotaReaderEnabled) ?? true
         let healthy = optionalEnabled && issue == nil && !(section?.windows.isEmpty ?? true)
         // A reader whose credential is on this Mac but unreadable by this
-        // build gets a button rather than a sentence it cannot act on.
+        // build gets a button rather than a sentence it cannot act on.  Only
+        // Claude's row carries it:  an interactive sign-in failure from any
+        // other reader (Antigravity, for one) also lands in consentNeeded,
+        // and its fix is signing in to that provider, not granting macOS
+        // permission to read Claude Code's saved login (owner, 2026-11-27).
         let needsConsent = model.consentNeeded.contains(reader.providerKey)
+            && (reader.providerKey == "anthropic" || reader.providerKey == "claude")
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 PlatformLogo(providerKey: reader.providerKey, size: 16,
