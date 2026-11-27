@@ -760,12 +760,18 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         // (owner, 2026-11-27, Antigravity Third-Party).  When a drawable row
         // comes up short, re-pair over the same drawable set the dropdown
         // uses (supplementary, masked, and disabled sources still excluded,
-        // so the HUD never draws a window its surfaces turned off).  The
-        // rescue fires only when the row has current windows at all:  a row
-        // whose every period has ended, or whose sources are off, keeps its
-        // empty meter set so its status words carry the story (CI, 2026-11-
-        // 27, PipInteractionTests).
-        if !windows.isEmpty, out.count < 2, issue == nil {
+        // so the HUD never draws a window its surfaces turned off).  Three
+        // gates keep the rescue from disagreeing with the surfaces:
+        // a failed row keeps its status words instead of meters;  a row
+        // with no current windows at all — every period ended, or sources
+        // off — keeps its empty meter set so the status carries the story
+        // (CI, 2026-11-27, PipInteractionTests);  and a unified-pool row
+        // never rescues, because `currentWindows` suppresses its own stale
+        // windows in favour of a peer's fresher reading, and re-pairing the
+        // row's own windows would put a suppressed meter back in the HUD
+        // (Kody finding, 2026-11-27).
+        if !windows.isEmpty, out.count < 2, issue == nil,
+           !UnifiedSubscriptionPool.participantKeys.contains(row.providerKey) {
             let drawable = row.section.windows
                 .filter {
                     !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)

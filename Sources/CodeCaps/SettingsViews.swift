@@ -387,11 +387,6 @@ struct SettingsPlatformsAndSourcesPage: View {
         Set(model.consentNeeded.filter { $0 == "anthropic" || $0 == "claude" })
     }
 
-    /// Reader IDs that ship an inline setup view in the provider's detail.
-    /// Plugin readers and future providers get one by extending this set and
-    /// the view switch in `providerDetail`.
-    private static let setupHelpReaderIDs: Set<String> = ["zcode", "alibaba-token-plan", "mimo-token-plan"]
-
     /// One canonical roster: every provider a reader knows about plus every
     /// platform a live section reports, in the owner's platform order, with
     /// never-ordered keys appended in reader order.  The old Platforms page
@@ -499,6 +494,16 @@ struct SettingsPlatformsAndSourcesPage: View {
                     rowCaption(providerKey: providerKey, reader: reader,
                                issue: issue, optionalEnabled: optionalEnabled)
                 }
+                // The tap lives on the label area only, so a flip of the
+                // visibility switch never also expands or collapses the
+                // detail (Kody finding, 2026-11-27).
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedProviderKey = providerKey
+                    if hasDetail(providerKey) {
+                        toggleDetail(providerKey, expanded: expanded)
+                    }
+                }
                 if hasDetail(providerKey) {
                     Button {
                         toggleDetail(providerKey, expanded: expanded)
@@ -535,13 +540,6 @@ struct SettingsPlatformsAndSourcesPage: View {
                     .accessibilityLabel(visible ? "Hide \(label) from the dashboard" : "Show \(label) in the dashboard")
             }
             .padding(.vertical, 5)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                selectedProviderKey = providerKey
-                if hasDetail(providerKey) {
-                    toggleDetail(providerKey, expanded: expanded)
-                }
-            }
             .onDrag {
                 draggedProviderKey = providerKey
                 return NSItemProvider(object: providerKey as NSString)
@@ -750,12 +748,15 @@ struct SettingsPlatformsAndSourcesPage: View {
 
     /// Live reorder for the drag: move `dragged` onto `target` in the
     /// roster and commit the whole order, so `platformOrder` always
-    /// describes what the roster shows.
+    /// describes what the roster shows.  `toOffset` alone serves both
+    /// directions:  the `move(fromOffsets:toOffset:)` contract measures the
+    /// destination against the array after the removal, so a downward drag
+    /// inserts at the target, not after it (Kody finding, 2026-11-27).
     private func moveProvider(_ dragged: String, onto target: String) {
         var keys = rosterKeys
         guard let from = keys.firstIndex(of: dragged),
               let to = keys.firstIndex(of: target), from != to else { return }
-        keys.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        keys.move(fromOffsets: IndexSet(integer: from), toOffset: to)
         model.platformOrder = keys
     }
 
