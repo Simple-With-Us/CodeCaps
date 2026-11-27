@@ -10,7 +10,8 @@ enum AlibabaTokenPlanHelp {
 
     static let planKeyCommand = "bl auth login --config token-plan --api-key <plan key> --base-url https://token-plan.ap-southeast-1.maas.aliyuncs.com"
     static let consoleCommand = "bl auth login --console --config token-plan --console-site international"
-    static let openAPICommand = "bl auth login --open-api --access-key-id <AccessKey ID> --access-key-secret <AccessKey secret>"
+    static let consoleNoBrowserCommand = "bl auth login --console --config token-plan --console-site international --no-browser"
+    static let openAPICommand = "bl auth login --open-api --config token-plan --access-key-id <AccessKey ID> --access-key-secret <AccessKey secret>"
     static let checkCommand = "bl usage token-plan --output json"
 
     static let tooltip = "Needs the Bailian CLI (bl) signed in two ways: your Token Plan key, and a console sign-in or AccessKey for usage."
@@ -33,6 +34,8 @@ struct AlibabaTokenPlanHelpView: View {
                 command(AlibabaTokenPlanHelp.planKeyCommand)
                 Text(AlibabaTokenPlanHelp.steps[2])
                 command(AlibabaTokenPlanHelp.consoleCommand)
+                Text("No browser on this machine:")
+                command(AlibabaTokenPlanHelp.consoleNoBrowserCommand)
                 Text("or")
                 command(AlibabaTokenPlanHelp.openAPICommand)
                 Link("Sign-in options (bl auth login)", destination: AlibabaTokenPlanHelp.authURL)
