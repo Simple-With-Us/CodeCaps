@@ -699,7 +699,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // after the bundle is there.
         if cachedBundle != nil && !bundleUnavailableForTesting {
             missingBundledKeys[cacheKeyString] = catalogEpoch
-            // Watchdog:  a mapped mark with NO candidate file anywhere says
+            // Watchdog:  a MAPPED mark with NO candidate file anywhere says
             // the pinned bundle cannot deliver, not that the artwork is
             // absent — a stale copy that won the search order, or a bundle
             // directory caught half-copied by an update.  The pin used to
@@ -707,18 +707,25 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             // once per cooldown so re-resolution (and the shadow-bundle
             // sweep in the candidate list) can land on a good copy, and one
             // notification wakes every open placeholder row (owner,
-            // 2026-11-27).
-            mappedMissStreak += 1
-            let now = Date().timeIntervalSinceReferenceDate
-            if mappedMissStreak >= 3, now - lastBundleDrop >= bundleDropCooldown {
-                lastBundleDrop = now
-                mappedMissStreak = 0
-                bundleGeneration &+= 1
-                cachedBundle = nil
-                candidateURLCache.removeAll()
-                missingBundledKeys.removeAll()
-                droppedPinFilename = filenames.first ?? "a mapped mark"
-                droppedPin = true
+            // 2026-11-27).  Two gates keep the watchdog honest (Seer and
+            // Kody findings, 2026-11-27):  files that exist but fail to
+            // decode (`sawAnyFile`) are an artwork problem, not a bundle
+            // problem, and keys with no catalog mapping (endpoint plugins,
+            // unknown keys) have no files to find by construction — either
+            // incrementing here would drop a healthy bundle on a loop.
+            if !sawAnyFile, mappedBase != nil {
+                mappedMissStreak += 1
+                let now = Date().timeIntervalSinceReferenceDate
+                if mappedMissStreak >= 3, now - lastBundleDrop >= bundleDropCooldown {
+                    lastBundleDrop = now
+                    mappedMissStreak = 0
+                    bundleGeneration &+= 1
+                    cachedBundle = nil
+                    candidateURLCache.removeAll()
+                    missingBundledKeys.removeAll()
+                    droppedPinFilename = filenames.first ?? "a mapped mark"
+                    droppedPin = true
+                }
             }
         }
         stateLock.unlock()
@@ -1491,14 +1498,16 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// Delay before re-probing a mark that failed to load, by attempt number:
     /// the first three tries come fast (a bundle that lands seconds after the
     /// first draw should not leave placeholder glyphs lingering), then five
-    /// seconds for the install/update window, then every fifteen so a mark
-    /// that appears later — a custom import, a late-mounted bundle, a
-    /// watchdog re-resolution — heals without a relaunch.  The old one-a-
-    /// minute tail left a healed surface staring at placeholders for most of
-    /// a minute (owner, 2026-11-27).
+    /// seconds for the install/update window, then once a minute so a mark
+    /// that appears later — a custom import, a late-mounted bundle — still
+    /// heals without a relaunch.  The tail stays at a minute on purpose
+    /// (Kody finding, 2026-11-27):  a healed bundle announces itself with a
+    /// decode, which publishes the marks-resolved wave and wakes every open
+    /// placeholder immediately, so a faster tail would only multiply the
+    /// candidate sweep's filesystem probes during an outage.
     public static func missingMarkRetryDelay(forAttempt attempt: Int) -> UInt64 {
         if attempt < 3 { return 1_000_000_000 }
-        return attempt < 12 ? 5_000_000_000 : 15_000_000_000
+        return attempt < 12 ? 5_000_000_000 : 60_000_000_000
     }
 }
 

@@ -356,6 +356,13 @@ struct SettingsPlatformsAndSourcesPage: View {
             pullEnabled = model.serverEnabled
             expandedProviders.formUnion(claudeConsentKeys)
         }
+        // Consent can arrive after the page opens — `refreshSavedTokenStates`
+        // answers on the async path — so a row that starts blocking later
+        // opens with its fix showing, exactly as it would have on appear
+        // (Kody finding, 2026-11-27).
+        .onChange(of: model.consentNeeded) { _, _ in
+            expandedProviders.formUnion(claudeConsentKeys)
+        }
         .task { await model.refreshSavedTokenStates() }
         .onChange(of: model.syncEnabled) { _, newValue in pushEnabled = newValue }
         .onChange(of: model.serverEnabled) { _, newValue in pullEnabled = newValue }
@@ -553,12 +560,15 @@ struct SettingsPlatformsAndSourcesPage: View {
             .accessibilityLabel("\(label), position \(position) of \(total)")
             // The named actions are VoiceOver's equivalent of the drag and
             // the context menu — the old page's visible arrow buttons, kept
-            // operable without a pointer.
+            // operable without a pointer.  The detail toggle only exists on
+            // rows with something to open, so a plain row never offers a
+            // no-op action (Kody finding, 2026-11-27).
             .accessibilityAction(named: Text("Move Up")) { moveProviderUp(providerKey) }
             .accessibilityAction(named: Text("Move Down")) { moveProviderDown(providerKey) }
-            .accessibilityAction(named: Text(expanded ? "Hide Detail" : "Show Detail")) {
-                toggleDetail(providerKey, expanded: expanded)
-            }
+            .modifier(DetailToggleAccessibilityAction(
+                hasDetail: hasDetail(providerKey),
+                title: expanded ? "Hide Detail" : "Show Detail",
+                action: { toggleDetail(providerKey, expanded: expanded) }))
             if expanded, hasDetail(providerKey) {
                 providerDetail(providerKey, reader: reader)
                     .padding(.leading, 40)
@@ -718,12 +728,24 @@ struct SettingsPlatformsAndSourcesPage: View {
 
     // Roster order helpers
 
+    /// Move within the roster the page displays, not within `platformOrder`
+    /// or the live sections:  the roster adds readers a live section has
+    /// never reported, and the model helpers would silently no-op or swap a
+    /// different list than the one on screen (Seer finding, 2026-11-27).
+    /// Committing the whole roster keeps `platformOrder` a faithful record
+    /// of what the owner arranged.
     private func moveProviderUp(_ providerKey: String) {
-        model.movePlatformUp(providerKey: providerKey)
+        var keys = rosterKeys
+        guard let index = keys.firstIndex(of: providerKey), index > 0 else { return }
+        keys.swapAt(index, index - 1)
+        model.platformOrder = keys
     }
 
     private func moveProviderDown(_ providerKey: String) {
-        model.movePlatformDown(providerKey: providerKey)
+        var keys = rosterKeys
+        guard let index = keys.firstIndex(of: providerKey), index < keys.count - 1 else { return }
+        keys.swapAt(index, index + 1)
+        model.platformOrder = keys
     }
 
     /// Live reorder for the drag: move `dragged` onto `target` in the
@@ -1151,6 +1173,27 @@ private struct ReauthorizeCaption: View {
             .foregroundStyle(Theme.warning)
             .textCase(nil)
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Live reflow for the roster drag, on the `PipOptionsReorderList` pattern:
+/// onDrag/onDrop with a drop delegate, which works inside a grouped Form
+/// where `List.onMove`'s drop indicator does not.
+/// The detail toggle as a named VoiceOver action, offered only on rows that
+/// have something to open — plain rows must not advertise a no-op.
+private struct DetailToggleAccessibilityAction: ViewModifier {
+    let hasDetail: Bool
+    let title: String
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        Group {
+            if hasDetail {
+                content.accessibilityAction(named: Text(title)) { action() }
+            } else {
+                content
+            }
+        }
     }
 }
 

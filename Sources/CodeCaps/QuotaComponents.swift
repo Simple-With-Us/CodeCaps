@@ -207,10 +207,13 @@ enum PipLogoStyle: String, CaseIterable, Identifiable {
     /// The mark style and monochrome forcing this choice asks for on the
     /// given background.  A provider whose owner picked a custom mark keeps
     /// it in every style; only the monochrome forcing changes, so a custom
-    /// logo can still be asked to read as a silhouette.
+    /// logo can still be asked to read as a silhouette.  The shipped HUD is
+    /// monochrome everywhere but Brand Color, and Automatic is that shipped
+    /// behaviour — so every choice but Brand Color forces monochrome
+    /// (Kody/Seer findings, 2026-11-27).
     func presentation(on background: PipBackground, ownerStyle: MarkStyle) -> (style: MarkStyle, forceMonochrome: Bool) {
         if ownerStyle == .custom {
-            return (.custom, self == .lightDark)
+            return (.custom, self != .brandColor)
         }
         switch self {
         case .automatic: return (background.markStyle(for: ownerStyle), true)
