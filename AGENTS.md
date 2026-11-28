@@ -160,3 +160,9 @@ that goes backwards silently strands every installed copy.
 - Audit batches use the `audit-#N` branch naming and ship in
   `docs/audits/<date>-<topic>.md`.
 - UI changes must be covered by automated visual verification where feasible: Playwright screenshot assertions for web surfaces, `xcrun simctl io booted screenshot` for iOS simulator. The owner never takes manual screenshots and does not run local UI preview sessions. Native Mac app UI is verified through code review and CI.
+
+## No secrets in files
+
+All secrets live only in Infisical. Never put a secret in a `.env`, `.vars`, `.dev.vars`, `.prod.vars` or any similar file, tracked or untracked, in any repo, ever. Read secrets from Infisical at run time through this repo's documented reader. Only `*.example`, `*.sample` and `*.template` files with empty or placeholder values may be committed. `.gitignore` blocks these file names and the `No env files` CI check fails any PR that tracks one. If a secret file is ever committed, delete it from the tree right away and keep a backup on our own systems (never in the repo or in chat). A history purge is a separate owner decision.
+
+The one exception is `.cursor/infisical.env`, which may hold only the `INFISICAL_PROJECT_ID`, `INFISICAL_ENV` and `INFISICAL_DOMAIN` coordinates and never a credential; CI checks its content.
